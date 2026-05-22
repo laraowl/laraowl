@@ -3,10 +3,10 @@
 namespace App\Services;
 
 use App\Events\ProjectDataIngested;
-use App\Models\Issue;
+use App\Jobs\ProcessRecordEnrichment;
 use App\Models\Project;
 use App\Models\Record;
-use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
 
 class IngestService
 {
@@ -21,205 +21,120 @@ class IngestService
     }
 
     /**
+     * Bulk-ingest a batch of records for a project.
+     *
+     * Performs a single Record::insert() for non-heartbeat rows, upserts
+     * heartbeats inline (they are not bulk-insertable), then dispatches a
+     * per-record enrichment job for each inserted row. Broadcast of
+     * ProjectDataIngested is rate-limited via a non-blocking cache lock.
+     */
+    public function ingestBulk(Project $project, array $records): void
+    {
+        $batchStart = now();
+        $rows = [];
+        $fingerprints = [];
+
+        foreach ($records as $data) {
+            $type = $data['t'] ?? null;
+            if (! $type) {
+                continue;
+            }
+
+            if ($type === 'heartbeat') {
+                $this->upsertHeartbeat($project, $data);
+
+                continue;
+            }
+
+            $fingerprint = $this->calculateFingerprint($type, $data);
+
+            $rows[] = [
+                'project_id' => $project->id,
+                'type' => $type,
+                'payload' => json_encode($data),
+                'fingerprint' => $fingerprint,
+                'created_at' => $batchStart,
+            ];
+
+            if ($fingerprint !== null) {
+                $fingerprints[] = $fingerprint;
+            }
+        }
+
+        if ($rows !== []) {
+            Record::insert($rows);
+
+            // Re-query the inserted records to get their IDs so we can
+            // dispatch a per-record enrichment job. Records lacking a
+            // fingerprint (e.g. cache-event, user, command — types whose
+            // calculateFingerprint() returns null) are intentionally skipped
+            // here because the enrichment paths (handleException,
+            // checkThresholds) do not apply to them in the original code path
+            // either. Two concurrent ingest batches that share a fingerprint
+            // inside the same second could cross-dispatch enrichment for each
+            // other's rows; the downstream enrichment job is idempotent
+            // (firstOrCreate by issue hash) so the worst case is a duplicate
+            // dispatch, not corrupted data.
+            $fingerprints = array_values(array_unique($fingerprints));
+            if ($fingerprints !== []) {
+                $inserted = Record::query()
+                    ->where('project_id', $project->id)
+                    ->whereIn('fingerprint', $fingerprints)
+                    ->where('created_at', '>=', $batchStart)
+                    ->get(['id', 'type']);
+
+                foreach ($inserted as $row) {
+                    ProcessRecordEnrichment::dispatch($project->id, $row->id, $row->type);
+                }
+            }
+        }
+
+        $throttle = (int) config('laraowl.broadcast_throttle_sec', 1);
+        $lock = Cache::lock("laraowl:broadcast:project:{$project->id}", $throttle);
+        if ($lock->get()) {
+            ProjectDataIngested::dispatch($project);
+        }
+    }
+
+    /**
      * Process incoming records and handle issue grouping.
+     *
+     * @deprecated Use {@see self::ingestBulk()} instead. Retained for
+     *             back-compat with callers that have not yet migrated.
      */
     public function ingest(Project $project, array $records): void
     {
-        DB::transaction(function () use ($project, $records) {
-            foreach ($records as $data) {
-                $type = $data['t'] ?? null;
-                if (! $type) {
-                    continue;
-                }
-
-                // The entire $data array is effectively the payload in this flat format
-                $record = $project->records()->create([
-                    'type' => $type,
-                    'payload' => $data,
-                    'fingerprint' => $this->calculateFingerprint($type, $data),
-                    'created_at' => now(),
-                ]);
-
-                if ($type === 'exception') {
-                    $this->handleException($project, $record);
-                }
-
-                if ($type === 'request') {
-                    $this->securityService->analyze($project, $record);
-                }
-
-                if ($type === 'security-audit') {
-                    $this->securityService->audit($project, $record);
-                }
-
-                if ($type === 'heartbeat') {
-                    $slug = $data['slug'] ?? 'default';
-                    $heartbeat = $project->heartbeats()->firstOrCreate(
-                        ['slug' => $slug],
-                        [
-                            'name' => $data['name'] ?? ucfirst($slug),
-                            'interval_minutes' => $data['interval'] ?? 15,
-                            'status' => 'active',
-                        ]
-                    );
-
-                    $heartbeat->update([
-                        'last_seen_at' => now(),
-                        'status' => 'active',
-                    ]);
-                }
-
-                $this->checkThresholds($project, $record);
-            }
-        });
-
-        // Broadcast real-time update to the frontend
-        ProjectDataIngested::dispatch($project);
+        $this->ingestBulk($project, $records);
     }
 
     /**
-     * Check if a record exceeds any performance thresholds.
+     * Upsert a heartbeat row inline. Heartbeats are upserts and cannot be
+     * batched alongside Record inserts.
+     *
+     * @param  array<string, mixed>  $data
      */
-    protected function checkThresholds(Project $project, Record $record): void
+    protected function upsertHeartbeat(Project $project, array $data): void
     {
-        $payload = $record->payload;
-        $duration = $payload['duration'] ?? null;
-
-        if ($duration === null) {
-            return;
-        }
-
-        // Find applicable thresholds for this project and type
-        $thresholdType = match ($record->type) {
-            'request' => 'route',
-            'job-attempt', 'queued-job' => 'job',
-            'command' => 'command',
-            'scheduled-task' => 'scheduled-task',
-            'query' => 'query',
-            default => null,
-        };
-
-        if (! $thresholdType) {
-            return;
-        }
-
-        $key = match ($thresholdType) {
-            'route' => $payload['route_path'] ?? $payload['path'] ?? '/',
-            'job' => $payload['name'] ?? $payload['job'] ?? 'Unknown',
-            'command', 'scheduled-task' => $payload['command'] ?? 'Unknown',
-            'query' => $payload['sql'] ?? 'Unknown',
-            default => null,
-        };
-
-        if (! $key) {
-            return;
-        }
-
-        $threshold = $project->thresholds()
-            ->where('type', $thresholdType)
-            ->where('key', $key)
-            ->where('is_enabled', true)
-            ->first();
-
-        if ($threshold && $duration > $threshold->value) {
-            $this->handleSlowPerformance($project, $record, $threshold);
-        }
-    }
-
-    /**
-     * Handle performance threshold violations by creating issues and notifying.
-     */
-    protected function handleSlowPerformance(Project $project, Record $record, $threshold): void
-    {
-        $hash = md5('slow_performance_'.$threshold->type.'_'.$threshold->key);
-        $title = 'Slow '.ucfirst($threshold->type).': '.$threshold->key;
-        $message = 'Duration: '.$record->payload['duration'].'ms (Threshold: '.$threshold->value.'ms)';
-
-        $issue = $project->issues()->firstOrCreate(
-            ['hash' => $hash],
+        $slug = $data['slug'] ?? 'default';
+        $heartbeat = $project->heartbeats()->firstOrCreate(
+            ['slug' => $slug],
             [
-                'title' => $title,
-                'message' => $message,
-                'status' => 'open',
-                'first_seen_at' => now(),
-                'last_seen_at' => now(),
+                'name' => $data['name'] ?? ucfirst($slug),
+                'interval_minutes' => $data['interval'] ?? 15,
+                'status' => 'active',
             ]
         );
 
-        $issue->increment('occurrences_count');
-        $issue->update([
+        $heartbeat->update([
             'last_seen_at' => now(),
-            'message' => $message, // Update with latest duration
+            'status' => 'active',
         ]);
-
-        if ($issue->wasRecentlyCreated) {
-            $this->alertService->notifySlowPerformance($issue);
-        }
-
-        $record->update(['issue_id' => $issue->id]);
-    }
-
-    /**
-     * Group exceptions into unique issues based on hash and detect spikes.
-     */
-    protected function handleException(Project $project, Record $record): void
-    {
-        $payload = $record->payload;
-        $hash = $payload['_group'] ?? md5($payload['class'].$payload['message'].($payload['file'] ?? '').($payload['line'] ?? ''));
-
-        $issue = $project->issues()->firstOrCreate(
-            ['hash' => $hash],
-            [
-                'title' => $payload['class'],
-                'message' => $payload['message'],
-                'status' => 'open',
-                'first_seen_at' => now(),
-                'last_seen_at' => now(),
-            ]
-        );
-
-        $issue->increment('occurrences_count');
-        $issue->update(['last_seen_at' => now()]);
-
-        if ($issue->wasRecentlyCreated) {
-            $this->alertService->notifyNewIssue($issue);
-        }
-
-        $record->update(['issue_id' => $issue->id]);
-
-        // Detect Spike
-        $this->detectErrorSpike($project);
-    }
-
-    /**
-     * Detect sudden surge in errors.
-     */
-    protected function detectErrorSpike(Project $project): void
-    {
-        $windowMinutes = $project->settings['spike_window'] ?? 5;
-        $threshold = $project->settings['spike_threshold'] ?? 50;
-
-        $count = $project->records()
-            ->where('type', 'exception')
-            ->where('created_at', '>=', now()->subMinutes($windowMinutes))
-            ->count();
-
-        if ($count >= $threshold) {
-            // Avoid spamming - only alert once every window
-            $lastAlert = $project->settings['last_spike_alert_at'] ?? null;
-            if (! $lastAlert || now()->diffInMinutes($lastAlert) >= $windowMinutes) {
-                $this->alertService->notifyErrorSpike($project, $count, $windowMinutes);
-
-                // Update last alert time
-                $settings = $project->settings ?? [];
-                $settings['last_spike_alert_at'] = now();
-                $project->update(['settings' => $settings]);
-            }
-        }
     }
 
     /**
      * Calculate a unique fingerprint for grouping and fast lookup.
+     *
+     * @param  array<string, mixed>  $payload
      */
     protected function calculateFingerprint(string $type, array $payload): ?string
     {

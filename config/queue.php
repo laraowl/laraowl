@@ -13,7 +13,7 @@ return [
     |
     */
 
-    'default' => env('QUEUE_CONNECTION', 'database'),
+    'default' => env('QUEUE_CONNECTION', 'redis'),
 
     /*
     |--------------------------------------------------------------------------
@@ -29,6 +29,13 @@ return [
     |
     */
 
+    // LaraOwl Phase 2 named queues used on the redis connection:
+    //   - laraowl-ingest      → bulk record insert (small fast jobs from ProcessIngestedRecords)
+    //   - laraowl-enrichment  → per-record enrichment (slower, can be scaled independently)
+    //
+    // Operators should run separate workers per queue, for example:
+    //   php artisan queue:work redis --queue=laraowl-ingest --sleep=0 --tries=3
+    //   php artisan queue:work redis --queue=laraowl-enrichment --sleep=1 --tries=3
     'connections' => [
 
         'sync' => [

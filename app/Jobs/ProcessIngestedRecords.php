@@ -27,11 +27,17 @@ class ProcessIngestedRecords implements ShouldQueue
 
     /**
      * Create a new job instance.
+     *
+     * The named queue (`laraowl-ingest`) is set inside the constructor rather
+     * than as a property default to stay compatible with PHP 8.4's stricter
+     * trait property composition rules — see ProcessRecordEnrichment for the
+     * full rationale.
      */
     public function __construct(Project $project, array $records)
     {
         $this->project = $project;
         $this->records = $records;
+        $this->onQueue('laraowl-ingest');
     }
 
     /**
@@ -39,6 +45,6 @@ class ProcessIngestedRecords implements ShouldQueue
      */
     public function handle(IngestService $ingestService): void
     {
-        $ingestService->ingest($this->project, $this->records);
+        $ingestService->ingestBulk($this->project, $this->records);
     }
 }
