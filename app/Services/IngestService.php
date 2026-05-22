@@ -31,31 +31,9 @@ class IngestService
      */
     public function ingestBulk(Project $project, array $records): void
     {
-        $batchStart = now();
         $batchId = (string) Str::uuid();
-        $rows = [];
 
-        foreach ($records as $data) {
-            $type = $data['t'] ?? null;
-            if (! $type) {
-                continue;
-            }
-
-            if ($type === 'heartbeat') {
-                $this->upsertHeartbeat($project, $data);
-
-                continue;
-            }
-
-            $rows[] = [
-                'project_id' => $project->id,
-                'type' => $type,
-                'payload' => json_encode($data),
-                'fingerprint' => $this->calculateFingerprint($type, $data),
-                'batch_id' => $batchId,
-                'created_at' => $batchStart,
-            ];
-        }
+        $rows = $this->buildRowsAndHeartbeats($project, $records, $batchId);
 
         if ($rows !== []) {
             Record::insert($rows);
@@ -91,6 +69,43 @@ class IngestService
     public function ingest(Project $project, array $records): void
     {
         $this->ingestBulk($project, $records);
+    }
+
+    /**
+     * Build the bulk-insert row payload for non-heartbeat records and upsert
+     * heartbeats inline. Returns the array suitable for Record::insert().
+     *
+     * @param  array<int, array<string, mixed>>  $records
+     * @return array<int, array<string, mixed>>
+     */
+    private function buildRowsAndHeartbeats(Project $project, array $records, string $batchId): array
+    {
+        $batchStart = now();
+        $rows = [];
+
+        foreach ($records as $data) {
+            $type = $data['t'] ?? null;
+            if (! $type) {
+                continue;
+            }
+
+            if ($type === 'heartbeat') {
+                $this->upsertHeartbeat($project, $data);
+
+                continue;
+            }
+
+            $rows[] = [
+                'project_id' => $project->id,
+                'type' => $type,
+                'payload' => json_encode($data),
+                'fingerprint' => $this->calculateFingerprint($type, $data),
+                'batch_id' => $batchId,
+                'created_at' => $batchStart,
+            ];
+        }
+
+        return $rows;
     }
 
     /**
