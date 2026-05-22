@@ -1,6 +1,7 @@
 <?php
 
 use App\Events\ProjectDataIngested;
+use App\Jobs\ProcessIngestedRecords;
 use App\Jobs\ProcessRecordEnrichment;
 use App\Models\Project;
 use App\Models\Record;
@@ -120,6 +121,21 @@ it('uses createOrFirst on issue lookups to survive concurrent enrichment races (
     $issues = $project->issues()->get();
     expect($issues)->toHaveCount(1, 'Both calls collapse into a single issue row')
         ->and($issues->first()->occurrences_count)->toBe(2);
+});
+
+it('honors LARAOWL_QUEUE_INGEST / LARAOWL_QUEUE_ENRICHMENT config keys for job routing (Codex round-2 #2)', function () {
+    config([
+        'laraowl.queues.ingest' => 'custom-laraowl-ingest',
+        'laraowl.queues.enrichment' => 'custom-laraowl-enrichment',
+    ]);
+
+    $project = makeFixesProject();
+
+    $ingestJob = new ProcessIngestedRecords($project, []);
+    expect($ingestJob->queue)->toBe('custom-laraowl-ingest');
+
+    $enrichmentJob = new ProcessRecordEnrichment(1, 1, 'request');
+    expect($enrichmentJob->queue)->toBe('custom-laraowl-enrichment');
 });
 
 it('honors LARAOWL_BROADCAST_THROTTLE_SEC from the real config file (Codex #6)', function () {

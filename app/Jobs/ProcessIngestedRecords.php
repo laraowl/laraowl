@@ -37,7 +37,7 @@ class ProcessIngestedRecords implements ShouldQueue
     {
         $this->project = $project;
         $this->records = $records;
-        $this->onQueue('laraowl-ingest');
+        $this->onQueue(config('laraowl.queues.ingest', 'laraowl-ingest'));
     }
 
     /**

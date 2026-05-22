@@ -41,7 +41,7 @@ class ProcessRecordEnrichment implements ShouldQueue
         public int $recordId,
         public string $type,
     ) {
-        $this->onQueue('laraowl-enrichment');
+        $this->onQueue(config('laraowl.queues.enrichment', 'laraowl-enrichment'));
     }
 
     /**
