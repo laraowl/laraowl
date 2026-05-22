@@ -7,6 +7,7 @@ use App\Jobs\ProcessRecordEnrichment;
 use App\Models\Project;
 use App\Models\Record;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Str;
 
 class IngestService
 {
@@ -31,8 +32,8 @@ class IngestService
     public function ingestBulk(Project $project, array $records): void
     {
         $batchStart = now();
+        $batchId = (string) Str::uuid();
         $rows = [];
-        $fingerprints = [];
 
         foreach ($records as $data) {
             $type = $data['t'] ?? null;
@@ -46,46 +47,31 @@ class IngestService
                 continue;
             }
 
-            $fingerprint = $this->calculateFingerprint($type, $data);
-
             $rows[] = [
                 'project_id' => $project->id,
                 'type' => $type,
                 'payload' => json_encode($data),
-                'fingerprint' => $fingerprint,
+                'fingerprint' => $this->calculateFingerprint($type, $data),
+                'batch_id' => $batchId,
                 'created_at' => $batchStart,
             ];
-
-            if ($fingerprint !== null) {
-                $fingerprints[] = $fingerprint;
-            }
         }
 
         if ($rows !== []) {
             Record::insert($rows);
 
-            // Re-query the inserted records to get their IDs so we can
-            // dispatch a per-record enrichment job. Records lacking a
-            // fingerprint (e.g. cache-event, user, command — types whose
-            // calculateFingerprint() returns null) are intentionally skipped
-            // here because the enrichment paths (handleException,
-            // checkThresholds) do not apply to them in the original code path
-            // either. Two concurrent ingest batches that share a fingerprint
-            // inside the same second could cross-dispatch enrichment for each
-            // other's rows; the downstream enrichment job is idempotent
-            // (firstOrCreate by issue hash) so the worst case is a duplicate
-            // dispatch, not corrupted data.
-            $fingerprints = array_values(array_unique($fingerprints));
-            if ($fingerprints !== []) {
-                $inserted = Record::query()
-                    ->where('project_id', $project->id)
-                    ->whereIn('fingerprint', $fingerprints)
-                    ->where('created_at', '>=', $batchStart)
-                    ->get(['id', 'type']);
+            // Re-query the inserted rows by the unique batch_id so two
+            // concurrent ingest jobs cannot cross-dispatch each other's
+            // enrichment work. Every inserted row gets a job (no
+            // fingerprint-based skipping) so types like `command` whose
+            // calculateFingerprint() returns null still receive the
+            // checkThresholds() pass downstream.
+            $inserted = Record::query()
+                ->where('batch_id', $batchId)
+                ->get(['id', 'type']);
 
-                foreach ($inserted as $row) {
-                    ProcessRecordEnrichment::dispatch($project->id, $row->id, $row->type);
-                }
+            foreach ($inserted as $row) {
+                ProcessRecordEnrichment::dispatch($project->id, $row->id, $row->type);
             }
         }
 
@@ -147,7 +133,10 @@ class IngestService
             'exception' => ($payload['class'] ?? '').($payload['message'] ?? ''),
             'query' => $payload['sql'] ?? '',
             'job', 'job-attempt', 'queued-job' => $payload['job'] ?? $payload['name'] ?? $payload['job_class'] ?? '',
-            'scheduled-task' => $payload['command'] ?? '',
+            // Includes `command` so the threshold-check enrichment path can
+            // resolve a stable key for it. Without this branch, commands fall
+            // to default => null and downstream threshold issues never fire.
+            'command', 'scheduled-task' => $payload['command'] ?? '',
             'mail' => $payload['mailable'] ?? '',
             'notification' => ($payload['notification'] ?? '').($payload['channel'] ?? ''),
             default => null,

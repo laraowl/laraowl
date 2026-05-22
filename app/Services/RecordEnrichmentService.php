@@ -25,7 +25,7 @@ class RecordEnrichmentService
         $payload = $record->payload;
         $hash = $payload['_group'] ?? md5($payload['class'].$payload['message'].($payload['file'] ?? '').($payload['line'] ?? ''));
 
-        $issue = $project->issues()->firstOrCreate(
+        $issue = $project->issues()->createOrFirst(
             ['hash' => $hash],
             [
                 'title' => $payload['class'],
@@ -150,7 +150,7 @@ class RecordEnrichmentService
         $title = 'Slow '.ucfirst($threshold->type).': '.$threshold->key;
         $message = 'Duration: '.$record->payload['duration'].'ms (Threshold: '.$threshold->value.'ms)';
 
-        $issue = $project->issues()->firstOrCreate(
+        $issue = $project->issues()->createOrFirst(
             ['hash' => $hash],
             [
                 'title' => $title,
