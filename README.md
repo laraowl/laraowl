@@ -170,6 +170,9 @@ php artisan key:generate
 # Configure your database in .env, then:
 php artisan migrate
 
+# Link the storage directory (required for uploaded project avatars to display)
+php artisan storage:link
+
 # Build frontend assets
 npm run build
 
