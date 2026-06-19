@@ -67,6 +67,7 @@ const iconMap: any = {
     webhook: Globe,
     telegram: Send,
     email: Mail,
+    gotify: MessageSquare,
 };
 
 export default function ProjectSettings({
@@ -1157,6 +1158,13 @@ export default function ProjectSettings({
                                                 desc: 'Send an email to any address.',
                                                 color: 'from-purple-500/20 to-indigo-500/20',
                                                 icon: Mail,
+                                            },
+                                            {
+                                                id: 'gotify',
+                                                name: 'Gotify',
+                                                desc: 'Push alerts to your self-hosted Gotify server.',
+                                                color: 'from-lime-500/20 to-green-500/20',
+                                                icon: Bell,
                                             },
                                         ].map((item) => {
                                             const isConfigured =
