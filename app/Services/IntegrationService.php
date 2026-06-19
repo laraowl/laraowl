@@ -213,7 +213,10 @@ class IntegrationService
 
         $body = '';
         foreach ($fields as $label => $value) {
-            $body .= "**{$label}:** {$value}\n";
+            if ($value === null || $value === '') {
+                continue;
+            }
+            $body .= "- **{$label}:** {$value}\n";
         }
         $body .= "\n{$message}\n";
         if ($url) {
