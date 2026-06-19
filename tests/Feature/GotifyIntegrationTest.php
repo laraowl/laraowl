@@ -34,7 +34,7 @@ class GotifyIntegrationTest extends TestCase
             $integration,
             '🚨 New Alert',
             'Something broke.',
-            ['Project' => 'Demo'],
+            ['Project' => 'Demo', 'Priority' => ''],
             'https://laraowl.test/issues/1',
         );
 
@@ -44,6 +44,7 @@ class GotifyIntegrationTest extends TestCase
                 && $request['title'] === '🚨 New Alert'
                 && str_contains($request['message'], 'Something broke.')
                 && str_contains($request['message'], '**Project:** Demo')
+                && ! str_contains($request['message'], 'Priority')
                 && $request['priority'] === 5;
         });
 
