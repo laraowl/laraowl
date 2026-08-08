@@ -25,8 +25,9 @@ export default function JobShow({
 }) {
     const { props }: any = usePage();
     const teamSlug = props.current_team?.slug || props.currentTeam?.slug;
-    const projectSlug =
-        props.current_project?.slug || props.currentProject?.slug;
+    const currentProject = props.current_project || props.currentProject;
+    const projectSlug = currentProject?.slug;
+    const isAggregate = Boolean(currentProject?.is_aggregate);
 
     const jobClass =
         meta?.name ||
@@ -72,6 +73,9 @@ export default function JobShow({
                         <TableHeader className="bg-muted/30">
                             <TableRow className="border-border text-[10px] font-bold text-muted-foreground uppercase hover:bg-transparent">
                                 <TableHead>Execution Time</TableHead>
+                                {isAggregate && (
+                                    <TableHead>Application</TableHead>
+                                )}
                                 <TableHead>Status</TableHead>
                                 <TableHead className="text-right">
                                     Duration
@@ -90,6 +94,11 @@ export default function JobShow({
                                             record.created_at,
                                         ).toLocaleString()}
                                     </TableCell>
+                                    {isAggregate && (
+                                        <TableCell className="text-xs text-muted-foreground">
+                                            {record.project?.name || '—'}
+                                        </TableCell>
+                                    )}
                                     <TableCell>
                                         <Badge
                                             className={`text-[10px] font-bold uppercase ${

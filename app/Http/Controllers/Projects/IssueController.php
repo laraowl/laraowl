@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Projects;
 
+use App\Concerns\ResolvesProjectScope;
 use App\Http\Controllers\Controller;
 use App\Models\Issue;
 use App\Models\Project;
@@ -15,6 +16,8 @@ use Inertia\Response;
 
 class IssueController extends Controller
 {
+    use ResolvesProjectScope;
+
     protected IssueService $issueService;
 
     public function __construct(IssueService $issueService)
@@ -24,16 +27,21 @@ class IssueController extends Controller
 
     /**
      * Display a listing of project issues.
+     *
+     * `$project` is the raw route segment rather than a bound `Project` so it
+     * can also be the reserved "All" slug (see `ResolvesProjectScope`).
+     * `show`/`update`/`comment` below stay bound to a real `Project`.
      */
-    public function index(Request $request, Team $current_team, Project $project): Response
+    public function index(Request $request, Team $current_team, string $project): Response
     {
+        $scope = $this->resolveProjectScope($current_team, $project);
         $filters = $request->only(['status', 'search']);
 
         return Inertia::render('projects/issues/index', [
-            'issues' => $this->issueService->getPaginatedIssues($project, $filters),
+            'issues' => $this->issueService->getPaginatedIssues($scope, $filters),
             'filters' => array_merge(['status' => 'open'], $filters),
-            'counts' => $this->issueService->getIssueCounts($project),
-            'performance' => $this->issueService->getPerformanceStats($project),
+            'counts' => $this->issueService->getIssueCounts($scope),
+            'performance' => $this->issueService->getPerformanceStats($scope),
             'team_members' => $current_team->members,
         ]);
     }

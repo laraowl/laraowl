@@ -3,8 +3,8 @@
 namespace App\Services;
 
 use App\Models\Issue;
-use App\Models\Project;
 use App\Models\User;
+use App\Support\ProjectContext;
 use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\DB;
 
@@ -13,11 +13,12 @@ class IssueService
     /**
      * Get paginated issues with advanced filters.
      */
-    public function getPaginatedIssues(Project $project, array $filters = []): LengthAwarePaginator
+    public function getPaginatedIssues(ProjectContext $project, array $filters = []): LengthAwarePaginator
     {
         $status = $filters['status'] ?? 'open';
 
-        $query = $project->issues()
+        $query = Issue::query()
+            ->whereIn('project_id', $project->projectIds())
             ->with(['assignee', 'project'])
             ->withCount('records')
             ->when($status !== 'all' && $status !== 'unassigned' && $status !== 'mine', function ($q) use ($status) {
@@ -42,18 +43,23 @@ class IssueService
     /**
      * Get real performance metrics for the project.
      */
-    public function getPerformanceStats(Project $project): array
+    public function getPerformanceStats(ProjectContext $project): array
     {
-        $total = $project->issues()->count();
-        $resolved = $project->issues()->where('status', 'resolved')->count();
+        $issues = fn () => Issue::query()->whereIn('project_id', $project->projectIds());
+
+        $total = $issues()->count();
+        $resolved = $issues()->where('status', 'resolved')->count();
         $driver = DB::connection()->getDriverName();
 
         $resolutionRate = $total > 0 ? round(($resolved / $total) * 100, 1) : 0;
-        $avgResolutionExpression = $driver === 'pgsql'
-            ? 'AVG(EXTRACT(EPOCH FROM (resolved_at - created_at))) as avg_time'
-            : 'AVG(TIMESTAMPDIFF(SECOND, created_at, resolved_at)) as avg_time';
+        $avgResolutionExpression = match ($driver) {
+            'pgsql' => 'AVG(EXTRACT(EPOCH FROM (resolved_at - created_at))) as avg_time',
+            // SQLite only (test suite); production runs pgsql/mysql exclusively.
+            'sqlite' => 'AVG((julianday(resolved_at) - julianday(created_at)) * 86400) as avg_time',
+            default => 'AVG(TIMESTAMPDIFF(SECOND, created_at, resolved_at)) as avg_time',
+        };
 
-        $avgResolutionTime = $project->issues()
+        $avgResolutionTime = $issues()
             ->whereNotNull('resolved_at')
             ->select(DB::raw($avgResolutionExpression))
             ->first()
@@ -63,8 +69,8 @@ class IssueService
             'resolution_rate' => $resolutionRate,
             'avg_resolution_time' => round($avgResolutionTime / 3600, 1), // in hours
             'total_resolved' => $resolved,
-            'open_issues' => $project->issues()->where('status', 'open')->count(),
-            'daily_trend' => $project->issues()
+            'open_issues' => $issues()->where('status', 'open')->count(),
+            'daily_trend' => $issues()
                 ->select(DB::raw('DATE(created_at) as date'), DB::raw('count(*) as count'))
                 ->where('created_at', '>=', now()->subDays(30))
                 ->groupBy('date')
@@ -134,12 +140,14 @@ class IssueService
     /**
      * Get summary stats for issues dashboard.
      */
-    public function getIssueCounts(Project $project): array
+    public function getIssueCounts(ProjectContext $project): array
     {
+        $issues = fn () => Issue::query()->whereIn('project_id', $project->projectIds());
+
         return [
-            'open' => $project->issues()->where('status', 'open')->count(),
-            'resolved' => $project->issues()->where('status', 'resolved')->count(),
-            'ignored' => $project->issues()->where('status', 'ignored')->count(),
+            'open' => $issues()->where('status', 'open')->count(),
+            'resolved' => $issues()->where('status', 'resolved')->count(),
+            'ignored' => $issues()->where('status', 'ignored')->count(),
         ];
     }
 }

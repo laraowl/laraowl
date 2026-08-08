@@ -25,8 +25,9 @@ export default function CommandShow({
 }) {
     const { props }: any = usePage();
     const teamSlug = props.current_team?.slug || props.currentTeam?.slug;
-    const projectSlug =
-        props.current_project?.slug || props.currentProject?.slug;
+    const currentProject = props.current_project || props.currentProject;
+    const projectSlug = currentProject?.slug;
+    const isAggregate = Boolean(currentProject?.is_aggregate);
 
     const commandName = meta?.command || 'Unknown Command';
     const recordHref = (record: number) =>
@@ -87,6 +88,9 @@ export default function CommandShow({
                             <TableHeader className="bg-muted/30">
                                 <TableRow className="border-border text-[10px] font-bold text-muted-foreground uppercase hover:bg-transparent">
                                     <TableHead>Date</TableHead>
+                                    {isAggregate && (
+                                        <TableHead>Application</TableHead>
+                                    )}
                                     <TableHead>Arguments</TableHead>
                                     <TableHead className="text-center">
                                         Exit Code
@@ -108,6 +112,11 @@ export default function CommandShow({
                                                 record.created_at,
                                             ).toLocaleString()}
                                         </TableCell>
+                                        {isAggregate && (
+                                            <TableCell className="text-xs text-muted-foreground">
+                                                {record.project?.name || '—'}
+                                            </TableCell>
+                                        )}
                                         <TableCell>
                                             <span className="max-w-md truncate font-mono text-xs text-foreground/90">
                                                 {record.payload.arguments ||

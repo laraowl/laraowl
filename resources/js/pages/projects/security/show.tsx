@@ -33,6 +33,7 @@ export default function SecurityDetails({
     const currentProject = props.current_project || props.currentProject;
     const teamSlug = props.current_team?.slug || props.currentTeam?.slug;
     const projectSlug = currentProject?.slug;
+    const isAggregate = Boolean(currentProject?.is_aggregate);
 
     const title = meta?.title || 'Security Threat';
     const message = meta?.message || 'No details available';
@@ -112,6 +113,11 @@ export default function SecurityDetails({
                                     <TableHead className="px-6 py-4 text-[10px] font-black tracking-widest text-muted-foreground uppercase">
                                         Timestamp
                                     </TableHead>
+                                    {isAggregate && (
+                                        <TableHead className="py-4 text-[10px] font-black tracking-widest text-muted-foreground uppercase">
+                                            Application
+                                        </TableHead>
+                                    )}
                                     <TableHead className="py-4 text-[10px] font-black tracking-widest text-muted-foreground uppercase">
                                         Source & Details
                                     </TableHead>
@@ -136,6 +142,11 @@ export default function SecurityDetails({
                                                 ).toLocaleTimeString()}
                                             </div>
                                         </TableCell>
+                                        {isAggregate && (
+                                            <TableCell className="py-5 align-top text-xs text-muted-foreground">
+                                                {record.project?.name || '—'}
+                                            </TableCell>
+                                        )}
                                         <TableCell className="py-5">
                                             <div className="flex flex-col gap-3">
                                                 <div className="flex items-center gap-2">

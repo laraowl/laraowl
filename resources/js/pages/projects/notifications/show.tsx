@@ -24,8 +24,9 @@ export default function NotificationShow({
 }) {
     const { props }: any = usePage();
     const teamSlug = props.current_team?.slug || props.currentTeam?.slug;
-    const projectSlug =
-        props.current_project?.slug || props.currentProject?.slug;
+    const currentProject = props.current_project || props.currentProject;
+    const projectSlug = currentProject?.slug;
+    const isAggregate = Boolean(currentProject?.is_aggregate);
 
     const notificationClass =
         meta?.notification_class || 'Unknown Notification';
@@ -79,6 +80,9 @@ export default function NotificationShow({
                         <TableHeader className="bg-muted/30">
                             <TableRow className="border-border text-[10px] font-bold text-muted-foreground uppercase hover:bg-transparent">
                                 <TableHead>Sent At</TableHead>
+                                {isAggregate && (
+                                    <TableHead>Application</TableHead>
+                                )}
                                 <TableHead>Status</TableHead>
                                 <TableHead>Recipient</TableHead>
                                 <TableHead className="w-[50px]"></TableHead>
@@ -95,6 +99,11 @@ export default function NotificationShow({
                                             record.created_at,
                                         ).toLocaleString()}
                                     </TableCell>
+                                    {isAggregate && (
+                                        <TableCell className="text-xs text-muted-foreground">
+                                            {record.project?.name || '—'}
+                                        </TableCell>
+                                    )}
                                     <TableCell>
                                         <Badge
                                             className={`text-[10px] font-bold uppercase ${record.payload.status === 'sent' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-red-500/10 text-red-500'} border-none`}

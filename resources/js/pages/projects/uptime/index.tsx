@@ -17,6 +17,7 @@ import AppLayout from '@/layouts/app-layout';
 export default function UptimeIndex({ checks, uptime_stats, period }: any) {
     const { props }: any = usePage();
     const currentProject = props.current_project || props.currentProject;
+    const isAggregate = Boolean(currentProject?.is_aggregate);
 
     useLiveReload(currentProject?.id);
 
@@ -199,6 +200,11 @@ export default function UptimeIndex({ checks, uptime_stats, period }: any) {
                         <table className="w-full border-collapse text-left">
                             <thead>
                                 <tr className="border-b border-border/50 bg-muted/30">
+                                    {isAggregate && (
+                                        <th className="px-6 py-4 text-[10px] font-black tracking-widest text-muted-foreground uppercase">
+                                            Application
+                                        </th>
+                                    )}
                                     <th className="px-6 py-4 text-[10px] font-black tracking-widest text-muted-foreground uppercase">
                                         Status
                                     </th>
@@ -219,6 +225,11 @@ export default function UptimeIndex({ checks, uptime_stats, period }: any) {
                                         key={check.id}
                                         className="group transition-colors hover:bg-muted/30"
                                     >
+                                        {isAggregate && (
+                                            <td className="px-6 py-4 text-xs font-bold text-muted-foreground">
+                                                {check.project?.name || '—'}
+                                            </td>
+                                        )}
                                         <td className="px-6 py-4">
                                             <div className="flex items-center gap-2">
                                                 {check.status === 'up' ? (
