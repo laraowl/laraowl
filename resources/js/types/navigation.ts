@@ -12,4 +12,8 @@ export type NavItem = {
     icon?: LucideIcon | null;
     isActive?: boolean;
     items?: NavItem[];
+    /** Shown but not clickable — e.g. a per-application screen while "All" is selected. */
+    disabled?: boolean;
+    /** Tooltip text explaining why, shown when `disabled` is true. */
+    disabledReason?: string;
 };

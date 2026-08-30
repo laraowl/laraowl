@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use App\Concerns\BuildsRollupQueries;
+use App\Models\Issue;
 use App\Models\Project;
 use App\Models\Record;
 use App\Models\RecordGroupRollup;
@@ -9,6 +11,8 @@ use App\Models\RecordGroupUserBucket;
 use App\Models\RecordIpBucket;
 use App\Models\RecordRollup;
 use App\Models\RecordUserBucket;
+use App\Models\UptimeCheck;
+use App\Support\ProjectContext;
 use Carbon\Carbon;
 use Cron\CronExpression;
 use Illuminate\Database\Eloquent\Builder;
@@ -21,15 +25,17 @@ use Illuminate\Support\Str;
 
 class RecordService
 {
+    use BuildsRollupQueries;
+
     /**
      * Get aggregated stats for various record types.
      */
-    public function getQuickStats(Project $project, ?string $period = null, ?string $from = null, ?string $to = null): array
+    public function getQuickStats(ProjectContext $project, ?string $period = null, ?string $from = null, ?string $to = null): array
     {
         $types = ['request', 'exception', 'query', 'queued-job', 'job-attempt', 'scheduled-task', 'cache-event', 'log', 'mail', 'notification', 'outgoing-request'];
 
         $counts = RecordRollup::query()
-            ->where('project_id', $project->id)
+            ->whereIn('project_id', $project->projectIds())
             ->whereIn('type', $types)
             ->forPeriod($period, $from, $to)
             ->select('type', DB::raw('SUM('.$this->col('count').') as total'))
@@ -51,7 +57,7 @@ class RecordService
     /**
      * Aggregate Request Data
      */
-    public function getRequestStats(Project $project, ?string $period = null, ?string $from = null, ?string $to = null, string $sort = 'total', string $direction = 'desc'): array
+    public function getRequestStats(ProjectContext $project, ?string $period = null, ?string $from = null, ?string $to = null, string $sort = 'total', string $direction = 'desc'): array
     {
         $allowedSorts = ['method', 'path', 'total', 'ok_count', 'client_error_count', 'server_error_count', 'avg_duration', 'p95_duration'];
         $sort = in_array($sort, $allowedSorts) ? $sort : 'total';
@@ -90,7 +96,7 @@ class RecordService
     /**
      * Get comprehensive dashboard metrics.
      */
-    public function getDashboardStats(Project $project, ?string $period = null, ?string $from = null, ?string $to = null): array
+    public function getDashboardStats(ProjectContext $project, ?string $period = null, ?string $from = null, ?string $to = null): array
     {
         $requestStats = $this->rollupTotals($project, 'request', $period, $from, $to);
         $exceptionStats = $this->rollupTotals($project, 'exception', $period, $from, $to);
@@ -115,7 +121,13 @@ class RecordService
                 'min' => round((float) ($requestStats->min_duration ?? 0), 2),
             ],
             'total_exceptions' => (int) $exceptionStats->total,
-            'recent_issues' => $project->issues()->where('status', 'open')->latest('last_seen_at')->limit(5)->get(),
+            'recent_issues' => Issue::query()
+                ->whereIn('project_id', $project->projectIds())
+                ->where('status', 'open')
+                ->with('project:id,name,slug')
+                ->latest('last_seen_at')
+                ->limit(5)
+                ->get(),
             'timeSeries' => $this->getDetailedTimeSeries($project, 'request', $period, $from, $to),
             'exceptionTimeSeries' => $this->getDetailedTimeSeries($project, 'exception', $period, $from, $to),
             'job_stats' => [
@@ -131,20 +143,53 @@ class RecordService
             'auth_users_count' => $this->distinctUsers($project, 'request', $period, $from, $to),
             'guest_users_count' => (int) $requestStats->total - (int) $requestStats->authed,
             'period' => $period,
-            'uptime_status' => [
-                'current' => $project->last_uptime_status ?? 'unknown',
-                'last_check' => $project->last_uptime_check_at ? $project->last_uptime_check_at->toIso8601String() : null,
-                'url' => $project->url,
-            ],
+            'uptime_status' => $project->isAggregate()
+                ? $this->aggregateUptimeStatus($project)
+                : [
+                    'current' => $project->last_uptime_status ?? 'unknown',
+                    'last_check' => $project->last_uptime_check_at ? $project->last_uptime_check_at->toIso8601String() : null,
+                    'url' => $project->url,
+                    'up' => $project->last_uptime_status === 'up' ? 1 : 0,
+                    'down' => $project->last_uptime_status === 'down' ? 1 : 0,
+                    'total' => 1,
+                ],
+        ];
+    }
+
+    /**
+     * Uptime status summary for the "All" aggregate scope, shaped to match
+     * the single-project `uptime_status` payload so the dashboard card needs
+     * no changes beyond rendering counts: `total` is every project in scope
+     * (not just the ones already checked), `last_check` is the oldest check
+     * across all of them (the most overdue one, worth drawing attention to),
+     * and `current` collapses to 'up' only if none are down.
+     */
+    private function aggregateUptimeStatus(ProjectContext $project): array
+    {
+        $projects = Project::query()
+            ->whereIn('id', $project->projectIds())
+            ->get(['last_uptime_status', 'last_uptime_check_at']);
+
+        $up = $projects->where('last_uptime_status', 'up')->count();
+        $down = $projects->where('last_uptime_status', 'down')->count();
+        $total = $projects->count();
+        $oldestCheck = $projects->pluck('last_uptime_check_at')->filter()->min();
+
+        return [
+            'current' => $total === 0 ? 'unknown' : ($down === 0 ? 'up' : 'down'),
+            'last_check' => $oldestCheck?->toIso8601String(),
+            'url' => null,
+            'up' => $up,
+            'down' => $down,
+            'total' => $total,
         ];
     }
 
     /**
      * Aggregate User Data
      */
-    public function getUserStats(Project $project, ?string $period = null, ?string $from = null, ?string $to = null): array
+    public function getUserStats(ProjectContext $project, ?string $period = null, ?string $from = null, ?string $to = null): array
     {
-        $user = $this->jsonValue('user');
         $statusCode = $this->jsonNumeric('status_code');
         $userHash = "MD5(COALESCE({$this->jsonText('user')}, 'Anonymous'))";
 
@@ -158,7 +203,7 @@ class RecordService
         $isException = $this->col('type')." = 'exception'";
 
         $users = RecordUserBucket::query()
-            ->where('project_id', $project->id)
+            ->whereIn('project_id', $project->projectIds())
             ->forPeriod($period, $from, $to)
             ->select([
                 DB::raw("{$userKey} as user_id"),
@@ -189,7 +234,7 @@ class RecordService
     /**
      * Aggregate Job Data
      */
-    public function getJobStats(Project $project, ?string $period = null, ?string $from = null, ?string $to = null): array
+    public function getJobStats(ProjectContext $project, ?string $period = null, ?string $from = null, ?string $to = null): array
     {
         $types = ['job-attempt', 'queued-job'];
 
@@ -220,10 +265,8 @@ class RecordService
     /**
      * Exceptions Aggregation
      */
-    public function getExceptionStats(Project $project, ?string $period = null, ?string $from = null, ?string $to = null): array
+    public function getExceptionStats(ProjectContext $project, ?string $period = null, ?string $from = null, ?string $to = null): array
     {
-        $userDistinct = $this->jsonDistinct('user');
-
         $overview = $this->rollupTotals($project, 'exception', $period, $from, $to);
 
         $uniqueTypes = $this->distinctGroups($project, 'exception', $period, $from, $to);
@@ -231,7 +274,7 @@ class RecordService
         $exceptions = $this->groupList($project, 'exception', $period, $from, $to, sort: 'last_seen');
 
         $userCounts = RecordGroupUserBucket::query()
-            ->where('project_id', $project->id)
+            ->whereIn('project_id', $project->projectIds())
             ->where('type', 'exception')
             ->whereIn('group_key', collect($exceptions->items())->pluck('hash')->all())
             ->forPeriod($period, $from, $to)
@@ -261,7 +304,7 @@ class RecordService
     /**
      * Commands Aggregation
      */
-    public function getCommandStats(Project $project, ?string $period = null, ?string $from = null, ?string $to = null): array
+    public function getCommandStats(ProjectContext $project, ?string $period = null, ?string $from = null, ?string $to = null): array
     {
         $exitCode = $this->jsonNumeric('exit_code');
         $duration = $this->jsonNumeric('duration');
@@ -292,10 +335,9 @@ class RecordService
     /**
      * Scheduled Tasks Aggregation
      */
-    public function getScheduledTaskStats(Project $project, ?string $period = null, ?string $from = null, ?string $to = null): array
+    public function getScheduledTaskStats(ProjectContext $project, ?string $period = null, ?string $from = null, ?string $to = null): array
     {
         $exitCode = $this->jsonNumeric('exit_code');
-        $exitCodeValue = $this->jsonValue('exit_code');
         $duration = $this->jsonNumeric('duration');
         $status = $this->jsonText('status');
 
@@ -338,7 +380,7 @@ class RecordService
     /**
      * Query Aggregation
      */
-    public function getQueryStats(Project $project, ?string $period = null, ?string $from = null, ?string $to = null): array
+    public function getQueryStats(ProjectContext $project, ?string $period = null, ?string $from = null, ?string $to = null): array
     {
         $duration = $this->jsonNumeric('duration');
 
@@ -367,7 +409,7 @@ class RecordService
     /**
      * Outgoing Requests Aggregation
      */
-    public function getOutgoingRequestStats(Project $project, ?string $period = null, ?string $from = null, ?string $to = null): array
+    public function getOutgoingRequestStats(ProjectContext $project, ?string $period = null, ?string $from = null, ?string $to = null): array
     {
         $statusCode = $this->jsonNumeric('status_code');
         $status = $this->jsonNumeric('status');
@@ -398,7 +440,7 @@ class RecordService
     /**
      * Cache Aggregation
      */
-    public function getCacheStats(Project $project, ?string $period = null, ?string $from = null, ?string $to = null): array
+    public function getCacheStats(ProjectContext $project, ?string $period = null, ?string $from = null, ?string $to = null): array
     {
         $cacheType = $this->jsonText('type');
 
@@ -427,9 +469,8 @@ class RecordService
     /**
      * Notification Aggregation
      */
-    public function getNotificationStats(Project $project, ?string $period = null, ?string $from = null, ?string $to = null): array
+    public function getNotificationStats(ProjectContext $project, ?string $period = null, ?string $from = null, ?string $to = null): array
     {
-        $channel = $this->jsonDistinct('channel');
         $status = $this->jsonText('status');
 
         $overview = $this->rollupTotals($project, 'notification', $period, $from, $to);
@@ -458,7 +499,7 @@ class RecordService
     /**
      * Mail Aggregation
      */
-    public function getMailStats(Project $project, ?string $period = null, ?string $from = null, ?string $to = null): array
+    public function getMailStats(ProjectContext $project, ?string $period = null, ?string $from = null, ?string $to = null): array
     {
         $mailer = $this->jsonText('mailer');
 
@@ -485,10 +526,17 @@ class RecordService
 
     /**
      * Unified History Retriever via Fingerprint
+     *
+     * Under the "All" aggregate scope this merges every project's records
+     * for the hash — consistent with the list pages, which already merge
+     * rows by hash across projects rather than keeping them separate (see
+     * `groupList()`).
      */
-    public function getHistoryByHash(Project $project, string $hash, ?string $period = null, ?string $from = null, ?string $to = null): LengthAwarePaginator
+    public function getHistoryByHash(ProjectContext $project, string $hash, ?string $period = null, ?string $from = null, ?string $to = null): LengthAwarePaginator
     {
-        return $project->records()
+        return Record::query()
+            ->whereIn('project_id', $project->projectIds())
+            ->with('project:id,name,slug')
             ->where('fingerprint', $hash)
             ->forPeriod($period, $from, $to)
             ->latest()
@@ -506,11 +554,13 @@ class RecordService
     /**
      * Get specific user history with additional stats
      */
-    public function getUserHistory(Project $project, string $hash, ?string $period = null, ?string $from = null, ?string $to = null): array
+    public function getUserHistory(ProjectContext $project, string $hash, ?string $period = null, ?string $from = null, ?string $to = null): array
     {
         $userKey = $this->resolveUserKeyFromHash($project, $hash);
 
-        $records = $project->records()
+        $records = Record::query()
+            ->whereIn('project_id', $project->projectIds())
+            ->with('project:id,name,slug')
             ->where('user_key', $userKey)
             ->forPeriod($period, $from, $to)
             ->latest()
@@ -542,7 +592,9 @@ class RecordService
             'user_id' => $user_id,
             'user_identifier' => $user_name, // legacy support
             'records' => $records,
-            'stats' => $project->records()->forPeriod($period, $from, $to)
+            'stats' => Record::query()
+                ->whereIn('project_id', $project->projectIds())
+                ->forPeriod($period, $from, $to)
                 ->where('user_key', $userKey)
                 ->select([
                     DB::raw('COUNT(*) as total'),
@@ -556,10 +608,10 @@ class RecordService
      * Searched over `record_user_buckets`, which holds one row per user per
      * hour rather than one per record.
      */
-    protected function resolveUserKeyFromHash(Project $project, string $hash): ?string
+    protected function resolveUserKeyFromHash(ProjectContext $project, string $hash): ?string
     {
         return RecordUserBucket::query()
-            ->where('project_id', $project->id)
+            ->whereIn('project_id', $project->projectIds())
             ->whereRaw('MD5('.$this->col('user_key').') = ?', [$hash])
             ->value('user_key');
     }
@@ -592,7 +644,7 @@ class RecordService
     /**
      * Get paginated logs with flattened payload if needed.
      */
-    public function getLogRecords(Project $project, ?string $search = null, ?string $period = null, ?string $from = null, ?string $to = null): LengthAwarePaginator
+    public function getLogRecords(ProjectContext $project, ?string $search = null, ?string $period = null, ?string $from = null, ?string $to = null): LengthAwarePaginator
     {
         return $this->paginateRawRecords($project, 'log', $search, $period, $from, $to, searchMessage: true)
             ->through(function ($record) {
@@ -607,7 +659,7 @@ class RecordService
     /**
      * Common method to paginate records for a specific type.
      */
-    public function getPaginatedRecords(Project $project, string $type, ?string $search = null, ?string $period = null, ?string $from = null, ?string $to = null): LengthAwarePaginator
+    public function getPaginatedRecords(ProjectContext $project, string $type, ?string $search = null, ?string $period = null, ?string $from = null, ?string $to = null): LengthAwarePaginator
     {
         return $this->paginateRawRecords($project, $this->resolveRecordType($type), $search, $period, $from, $to);
     }
@@ -615,9 +667,11 @@ class RecordService
     /**
      * A page of raw records, counted by the rollups rather than by the database.
      */
-    protected function paginateRawRecords(Project $project, string $type, ?string $search, ?string $period, ?string $from, ?string $to, bool $searchMessage = false): LengthAwarePaginator
+    protected function paginateRawRecords(ProjectContext $project, string $type, ?string $search, ?string $period, ?string $from, ?string $to, bool $searchMessage = false): LengthAwarePaginator
     {
-        $query = $project->records()
+        $query = Record::query()
+            ->whereIn('project_id', $project->projectIds())
+            ->with('project:id,name,slug')
             ->ofType($type)
             ->forPeriod($period, $from, $to)
             ->latest();
@@ -673,13 +727,12 @@ class RecordService
     /**
      * Security Threats Aggregation
      */
-    public function getSecurityStats(Project $project, ?string $period = null, ?string $from = null, ?string $to = null): array
+    public function getSecurityStats(ProjectContext $project, ?string $period = null, ?string $from = null, ?string $to = null): array
     {
-        $records = $project->records()->ofType('request')->forPeriod($period, $from, $to);
         $status = $this->jsonText('status');
 
         $uniqueIps = RecordIpBucket::query()
-            ->where('project_id', $project->id)
+            ->whereIn('project_id', $project->projectIds())
             ->where('type', 'request')
             ->forPeriod($period, $from, $to)
             ->distinct()
@@ -692,15 +745,17 @@ class RecordService
             'total_requests' => $totalRequests,
         ];
 
+        $recordsQuery = fn () => Record::query()->whereIn('project_id', $project->projectIds());
+
         // Failed logins (last 24h or selected period)
-        $failedLogins = $project->records()
+        $failedLogins = $recordsQuery()
             ->ofType('auth-event')
             ->forPeriod($period, $from, $to)
             ->whereRaw("{$status} = 'failed'")
             ->count();
 
         // Recent suspicious auth events
-        $recentAuthEvents = $project->records()
+        $recentAuthEvents = $recordsQuery()
             ->ofType('auth-event')
             ->forPeriod($period, $from, $to)
             ->whereRaw("{$status} = 'failed'")
@@ -716,11 +771,13 @@ class RecordService
             ]);
 
         return [
-            'threats' => $project->issues()
+            'threats' => Issue::query()
+                ->whereIn('project_id', $project->projectIds())
                 ->where('type', 'security')
-                ->where('project_id', $project->id)
+                ->with('project:id,name,slug')
                 ->select([
                     'id',
+                    'project_id',
                     'hash',
                     'title',
                     'message',
@@ -741,7 +798,7 @@ class RecordService
     /**
      * Time series aggregation for dashboards
      */
-    protected function getDetailedTimeSeries(Project $project, string $type, ?string $period = null, ?string $from = null, ?string $to = null): array
+    protected function getDetailedTimeSeries(ProjectContext $project, string $type, ?string $period = null, ?string $from = null, ?string $to = null): array
     {
         $period = $period ?: '1h';
 
@@ -751,7 +808,7 @@ class RecordService
         $sum = fn (string $column, string $alias) => DB::raw('SUM('.$this->col($column).') as '.$alias);
 
         $results = RecordRollup::query()
-            ->where('project_id', $project->id)
+            ->whereIn('project_id', $project->projectIds())
             ->where('type', $type)
             ->forPeriod($period, $from, $to)
             ->select([
@@ -772,7 +829,7 @@ class RecordService
         $userBucket = $groupsByMinute ? $this->col('bucket') : $bucket;
 
         $activeUsers = RecordUserBucket::query()
-            ->where('project_id', $project->id)
+            ->whereIn('project_id', $project->projectIds())
             ->where('type', $type)
             ->forPeriod($period, $from, $to)
             ->select([
@@ -810,78 +867,14 @@ class RecordService
         return $this->fillTimeSeriesGaps($results, $period, $from, $to);
     }
 
-    /**
-     * The chart key a grouped row belongs to.
-     */
-    private function seriesKey(string $value, bool $groupedByMinute): string
-    {
-        return $groupedByMinute ? Carbon::parse($value)->format('H:i') : $value;
-    }
-
-    /**
-     * Fill missing time slots with zeroed data.
-     */
-    protected function fillTimeSeriesGaps($results, string $period, ?string $from = null, ?string $to = null): array
-    {
-        $data = [];
-        $now = now();
-
-        $iterations = match ($period) {
-            '1h' => 60,
-            '24h' => 1440,
-            '7d' => 7,
-            '14d' => 14,
-            '30d' => 30,
-            default => 60,
-        };
-
-        $unit = match ($period) {
-            '7d', '14d', '30d' => 'day',
-            default => 'minute',
-        };
-
-        $dateFormat = match ($period) {
-            '7d', '14d', '30d' => 'm-d',
-            '24h' => 'H:i',
-            default => 'H:i',
-        };
-
-        for ($i = $iterations - 1; $i >= 0; $i--) {
-            $time = (clone $now)->sub($unit, $i);
-            $key = $time->format($dateFormat);
-
-            if ($results->has($key)) {
-                $data[] = $results->get($key);
-            } else {
-                $data[] = [
-                    'minute' => $key,
-                    'total' => 0,
-                    'ok' => 0,
-                    'client_error' => 0,
-                    'server_error' => 0,
-                    'avg_duration' => 0,
-                    'hits' => 0,
-                    'misses' => 0,
-                    'writes' => 0,
-                    'active_users' => 0,
-                    'total_requests' => 0,
-                    'authed' => 0,
-                    'guest' => 0,
-                ];
-            }
-        }
-
-        return $data;
-    }
-
-    private function enrichUserPaginator(Project $project, LengthAwarePaginator $paginator): LengthAwarePaginator
+    private function enrichUserPaginator(ProjectContext $project, LengthAwarePaginator $paginator): LengthAwarePaginator
     {
         $this->enrichUserRows($project, $paginator->getCollection());
 
         return $paginator;
     }
 
-    private function enrichUserRows(Project $project, iterable $rows): void
+    private function enrichUserRows(ProjectContext $project, iterable $rows): void
     {
         $ids = collect($rows)
             ->map(fn ($row) => (string) ($row->user_id ?? $row->user_identifier ?? $row->user_name ?? ''))
@@ -918,7 +911,7 @@ class RecordService
      * @param  array<int, int|string>  $ids
      * @return array<string, array{name: string, email: string}>
      */
-    private function userDetailsByIds(Project $project, array $ids): array
+    private function userDetailsByIds(ProjectContext $project, array $ids): array
     {
         $ids = collect($ids)
             ->map(fn (int|string $id): string => (string) $id)
@@ -932,7 +925,8 @@ class RecordService
 
         $details = [];
 
-        $project->records()
+        Record::query()
+            ->whereIn('project_id', $project->projectIds())
             ->ofType('user')
             ->whereIn(DB::raw($this->jsonText('id')), $ids->all())
             ->latest()
@@ -956,9 +950,9 @@ class RecordService
         return $details;
     }
 
-    public function getUptimeStats(Project $project, ?string $period = null, ?string $from = null, ?string $to = null): array
+    public function getUptimeStats(ProjectContext $project, ?string $period = null, ?string $from = null, ?string $to = null): array
     {
-        if (! $project->hasUptimeMonitoring()) {
+        if ($project instanceof Project && ! $project->hasUptimeMonitoring()) {
             return [
                 'checks' => new LengthAwarePaginator([], 0, 50),
                 'uptime_stats' => [
@@ -970,7 +964,9 @@ class RecordService
             ];
         }
 
-        $query = $project->uptimeChecks()
+        $query = UptimeCheck::query()
+            ->whereIn('project_id', $project->projectIds())
+            ->when($project->isAggregate(), fn ($q) => $q->with('project:id,name,slug'))
             ->orderBy('checked_at', 'desc');
 
         if ($period && $period !== 'all') {
@@ -986,13 +982,13 @@ class RecordService
 
         $checks = $query->paginate(50)->withQueryString();
 
-        $totalChecks = $project->uptimeChecks()->count();
-        $upChecks = $project->uptimeChecks()->where('status', 'up')->count();
+        $totalChecks = UptimeCheck::query()->whereIn('project_id', $project->projectIds())->count();
+        $upChecks = UptimeCheck::query()->whereIn('project_id', $project->projectIds())->where('status', 'up')->count();
 
         $stats = [
             'uptime_percentage' => $totalChecks > 0 ? round(($upChecks / $totalChecks) * 100, 2) : 100,
-            'avg_response_time' => round($project->uptimeChecks()->avg('response_time') ?? 0, 2),
-            'last_check' => $project->uptimeChecks()->latest('checked_at')->first(),
+            'avg_response_time' => round(UptimeCheck::query()->whereIn('project_id', $project->projectIds())->avg('response_time') ?? 0, 2),
+            'last_check' => UptimeCheck::query()->whereIn('project_id', $project->projectIds())->latest('checked_at')->first(),
             'total_checks' => $totalChecks,
         ];
 
@@ -1002,13 +998,19 @@ class RecordService
         ];
     }
 
-    public function getSecurityHistoryByHash(Project $project, string $hash, ?string $period = '24h', ?string $from = null, ?string $to = null): array
+    public function getSecurityHistoryByHash(ProjectContext $project, string $hash, ?string $period = '24h', ?string $from = null, ?string $to = null): array
     {
-        $issue = $project->issues()
+        // If the same threat hash exists in more than one project under the
+        // "All" scope, this picks one arbitrarily — same v1 simplification
+        // as groupList()'s cross-project merge by hash.
+        $issue = Issue::query()
+            ->whereIn('project_id', $project->projectIds())
             ->where('hash', $hash)
             ->firstOrFail();
 
-        $records = $project->records()
+        $records = Record::query()
+            ->whereIn('project_id', $project->projectIds())
+            ->with('project:id,name,slug')
             ->where(function ($q) use ($hash, $issue) {
                 $q->where('issue_id', $issue->id)
                     ->orWhere(function ($sq) use ($hash) {
@@ -1037,90 +1039,6 @@ class RecordService
         ];
     }
 
-    private function isPgsql(): bool
-    {
-        return DB::connection()->getDriverName() === 'pgsql';
-    }
-
-    private function jsonPathSegments(string $path): array
-    {
-        return explode('.', $path);
-    }
-
-    private function quoteLiteral(string $value): string
-    {
-        return "'".str_replace("'", "''", $value)."'";
-    }
-
-    private function jsonValue(string $path): string
-    {
-        if ($this->isPgsql()) {
-            $segments = array_map([$this, 'quoteLiteral'], $this->jsonPathSegments($path));
-
-            return 'payload #> ARRAY['.implode(', ', $segments).']';
-        }
-
-        return "JSON_EXTRACT(payload, '$.".$path."')";
-    }
-
-    private function jsonText(string $path): string
-    {
-        if ($this->isPgsql()) {
-            $segments = array_map([$this, 'quoteLiteral'], $this->jsonPathSegments($path));
-
-            return 'payload #>> ARRAY['.implode(', ', $segments).']';
-        }
-
-        return "JSON_UNQUOTE(JSON_EXTRACT(payload, '$.".$path."'))";
-    }
-
-    private function jsonNumeric(string $path): string
-    {
-        $text = $this->jsonText($path);
-
-        if ($this->isPgsql()) {
-            $trimmed = "NULLIF(BTRIM({$text}), '')";
-
-            return "CASE WHEN {$trimmed} ~ '^[+-]?([0-9]+([.][0-9]+)?|[.][0-9]+)$' THEN ({$trimmed})::numeric ELSE NULL END";
-        }
-
-        return "CAST(NULLIF({$text}, '') AS DECIMAL(20,6))";
-    }
-
-    private function jsonDistinct(string $path): string
-    {
-        if ($this->isPgsql()) {
-            return '('.$this->jsonValue($path).')::text';
-        }
-
-        return 'CAST('.$this->jsonValue($path).' AS CHAR)';
-    }
-
-    private function timeBucketSql(string $period, string $column = 'created_at'): string
-    {
-        if ($this->isPgsql()) {
-            return match ($period) {
-                '7d', '14d', '30d' => "to_char({$column}, 'MM-DD')",
-                'custom' => "to_char(date_trunc('hour', {$column}), 'YYYY-MM-DD HH24:00')",
-                default => "to_char({$column}, 'HH24:MI')",
-            };
-        }
-
-        return match ($period) {
-            '7d', '14d', '30d' => "DATE_FORMAT({$column}, '%m-%d')",
-            'custom' => "DATE_FORMAT({$column}, '%Y-%m-%d %H:00')",
-            default => "DATE_FORMAT({$column}, '%H:%i')",
-        };
-    }
-
-    /**
-     * Quote an identifier for the active driver.
-     */
-    private function col(string $name): string
-    {
-        return DB::connection()->getQueryGrammar()->wrap($name);
-    }
-
     /**
      * Paginate raw records without asking the database to count them.
      *
@@ -1145,10 +1063,10 @@ class RecordService
      *
      * @param  string|list<string>  $types
      */
-    protected function rollupCount(Project $project, string|array $types, ?string $period, ?string $from, ?string $to): int
+    protected function rollupCount(ProjectContext $project, string|array $types, ?string $period, ?string $from, ?string $to): int
     {
         return (int) RecordRollup::query()
-            ->where('project_id', $project->id)
+            ->whereIn('project_id', $project->projectIds())
             ->whereIn('type', (array) $types)
             ->forPeriod($period, $from, $to)
             ->sum('count');
@@ -1157,10 +1075,10 @@ class RecordService
     /**
      * Distinct groups of a type over the period, straight off the group rollups.
      */
-    protected function distinctGroups(Project $project, string $type, ?string $period, ?string $from, ?string $to, string $column = 'group_key'): int
+    protected function distinctGroups(ProjectContext $project, string $type, ?string $period, ?string $from, ?string $to, string $column = 'group_key'): int
     {
         return RecordGroupRollup::query()
-            ->where('project_id', $project->id)
+            ->whereIn('project_id', $project->projectIds())
             ->where('type', $type)
             ->forPeriod($period, $from, $to)
             ->distinct()
@@ -1172,7 +1090,7 @@ class RecordService
      *
      * @param  string|list<string>  $types
      */
-    protected function rollupTotals(Project $project, string|array $types, ?string $period = null, ?string $from = null, ?string $to = null): object
+    protected function rollupTotals(ProjectContext $project, string|array $types, ?string $period = null, ?string $from = null, ?string $to = null): object
     {
         $sum = fn (string $column, string $alias) => DB::raw('COALESCE(SUM('.$this->col($column).'), 0) as '.$alias);
 
@@ -1197,21 +1115,11 @@ class RecordService
         }
 
         return RecordRollup::query()
-            ->where('project_id', $project->id)
+            ->whereIn('project_id', $project->projectIds())
             ->whereIn('type', (array) $types)
             ->forPeriod($period, $from, $to)
             ->select($columns)
             ->first();
-    }
-
-    /**
-     * The mean duration. Averages are not additive, so they are recomputed from
-     */
-    protected function avgDuration(object $totals): float
-    {
-        $count = (int) ($totals->count_duration ?? 0);
-
-        return $count > 0 ? ((float) $totals->sum_duration) / $count : 0.0;
     }
 
     /**
@@ -1242,12 +1150,19 @@ class RecordService
     /**
      * The grouped list behind a type's top-N page, read from the group rollups.
      *
+     * v1 limitation: grouped only by `group_key`, not also `project_id`. In
+     * the "All" aggregate scope, two different projects producing the same
+     * content hash (e.g. the same route on two apps) are summed into a
+     * single row instead of shown per-app. Acceptable for now; revisit by
+     * adding `project_id` to the group-by plus a project column if/when this
+     * needs refining.
+     *
      * @param  string|list<string>  $types
      * @param  array<string, string>  $extraColumns  alias => SQL aggregate
      * @param  array<string, string>  $sortMap  request sort key => SQL alias
      */
     protected function groupList(
-        Project $project,
+        ProjectContext $project,
         string|array $types,
         ?string $period,
         ?string $from,
@@ -1291,7 +1206,7 @@ class RecordService
         $orderBy = $sortMap[$sort] ?? $sort;
 
         return RecordGroupRollup::query()
-            ->where('project_id', $project->id)
+            ->whereIn('project_id', $project->projectIds())
             ->whereIn('type', (array) $types)
             ->forPeriod($period, $from, $to)
             ->select($columns)
@@ -1312,10 +1227,10 @@ class RecordService
      *
      * @return Collection<int, object>
      */
-    protected function topUsers(Project $project, string $type, string $countAlias, ?string $period = null, ?string $from = null, ?string $to = null)
+    protected function topUsers(ProjectContext $project, string $type, string $countAlias, ?string $period = null, ?string $from = null, ?string $to = null)
     {
         return RecordUserBucket::query()
-            ->where('project_id', $project->id)
+            ->whereIn('project_id', $project->projectIds())
             ->where('type', $type)
             ->forPeriod($period, $from, $to)
             ->select([
@@ -1334,10 +1249,10 @@ class RecordService
     /**
      * Distinct users seen for a type over a period.
      */
-    protected function distinctUsers(Project $project, string $type, ?string $period = null, ?string $from = null, ?string $to = null): int
+    protected function distinctUsers(ProjectContext $project, string $type, ?string $period = null, ?string $from = null, ?string $to = null): int
     {
         return RecordUserBucket::query()
-            ->where('project_id', $project->id)
+            ->whereIn('project_id', $project->projectIds())
             ->where('type', $type)
             ->forPeriod($period, $from, $to)
             ->distinct()

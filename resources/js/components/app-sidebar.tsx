@@ -44,6 +44,7 @@ export function AppSidebar() {
     const currentProject = (props as any).currentProject;
     const projectSlug =
         currentProject?.slug || (projects.length > 0 ? projects[0].slug : '');
+    const isAggregate = Boolean(currentProject?.is_aggregate);
 
     const currentPeriod = (props as any).period || '1h';
     const from = (props as any).from;
@@ -163,6 +164,11 @@ export function AppSidebar() {
             title: 'Firewall',
             href: withPeriod(`/${teamSlug}/${projectSlug}/firewall`),
             icon: LockIcon,
+            // Firewall is per-application configuration, not a report
+            // screen — shown but not clickable while "All" is selected,
+            // since it 404s under that scope.
+            disabled: isAggregate,
+            disabledReason: 'Select an application to manage its firewall',
             items: [
                 {
                     title: 'Overview',
@@ -246,16 +252,18 @@ export function AppSidebar() {
 
                     <NavMain items={monitoringNavItems} label="Monitoring" />
 
-                    <NavMain
-                        items={[
-                            {
-                                title: 'Project Settings',
-                                href: `/${teamSlug}/${projectSlug}/settings`,
-                                icon: Settings,
-                            },
-                        ]}
-                        label="Settings"
-                    />
+                    {!isAggregate && (
+                        <NavMain
+                            items={[
+                                {
+                                    title: 'Project Settings',
+                                    href: `/${teamSlug}/${projectSlug}/settings`,
+                                    icon: Settings,
+                                },
+                            ]}
+                            label="Settings"
+                        />
+                    )}
                 </div>
             </SidebarContent>
 

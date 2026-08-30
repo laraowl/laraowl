@@ -63,6 +63,24 @@ test('dashboard totals and breakdowns come from the rollups', function () {
         ->and($stats['guest_users_count'])->toBe(1);
 });
 
+test('a single project always counts as one service in the uptime status', function () {
+    $up = Project::factory()->create(['last_uptime_status' => 'up']);
+    $down = Project::factory()->create(['last_uptime_status' => 'down']);
+    $unchecked = Project::factory()->create(['last_uptime_status' => null]);
+
+    expect(records()->getDashboardStats($up, '1h')['uptime_status'])->toMatchArray([
+        'current' => 'up', 'up' => 1, 'down' => 0, 'total' => 1,
+    ]);
+
+    expect(records()->getDashboardStats($down, '1h')['uptime_status'])->toMatchArray([
+        'current' => 'down', 'up' => 0, 'down' => 1, 'total' => 1,
+    ]);
+
+    expect(records()->getDashboardStats($unchecked, '1h')['uptime_status'])->toMatchArray([
+        'current' => 'unknown', 'up' => 0, 'down' => 0, 'total' => 1,
+    ]);
+});
+
 test('a user seen across several hours is counted once over the period', function () {
     $project = Project::factory()->create();
 

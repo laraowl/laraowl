@@ -45,23 +45,28 @@ export function IssueTable({
 }) {
     const { props }: any = usePage();
     const teamSlug = props.currentTeam?.slug || props.current_team?.slug;
-    const projectSlug =
-        props.currentProject?.slug || props.current_project?.slug;
+    const currentProject = props.currentProject || props.current_project;
+    const projectSlug = currentProject?.slug;
+    const isAggregate = Boolean(currentProject?.is_aggregate);
     const period = props.period as string | null | undefined;
     const from = props.from as string | null | undefined;
     const to = props.to as string | null | undefined;
 
     const data = issues.data || [];
+    // In the "All" aggregate scope, always link to the issue's own project
+    // — the current page is scoped to the whole team, not a single app.
     const issueHref = (issue: any) =>
         appendMonitoringQuery(
-            `/${teamSlug}/${projectSlug}/${baseUrl}/${baseUrl === 'issues' ? issue.id : issue.hash || issue.id}`,
+            `/${teamSlug}/${issue.project?.slug || projectSlug}/${baseUrl}/${baseUrl === 'issues' ? issue.id : issue.hash || issue.id}`,
             { period, from, to },
         );
 
-    const updateIssue = (id: number, data: any) => {
-        router.patch(`/${teamSlug}/${projectSlug}/${baseUrl}/${id}`, data, {
-            preserveScroll: true,
-        });
+    const updateIssue = (id: number, data: any, issue: any) => {
+        router.patch(
+            `/${teamSlug}/${issue.project?.slug || projectSlug}/${baseUrl}/${id}`,
+            data,
+            { preserveScroll: true },
+        );
     };
 
     if (data.length === 0) {
@@ -90,6 +95,11 @@ export function IssueTable({
                                 ISSUE <ChevronDown className="h-3 w-3" />
                             </div>
                         </TableHead>
+                        {isAggregate && (
+                            <TableHead className="hidden md:table-cell">
+                                Application
+                            </TableHead>
+                        )}
                         <TableHead className="hidden text-right sm:table-cell">
                             <div className="flex cursor-pointer items-center justify-end gap-1 transition-colors hover:text-foreground">
                                 COUNT <ArrowUpDown className="h-3 w-3" />
@@ -156,9 +166,11 @@ export function IssueTable({
                                             <DropdownMenuItem
                                                 key={p}
                                                 onClick={() =>
-                                                    updateIssue(issue.id, {
-                                                        priority: p,
-                                                    })
+                                                    updateIssue(
+                                                        issue.id,
+                                                        { priority: p },
+                                                        issue,
+                                                    )
                                                 }
                                                 className="flex cursor-pointer items-center justify-between text-xs capitalize"
                                             >
@@ -201,6 +213,11 @@ export function IssueTable({
                                     </TooltipProvider>
                                 </Link>
                             </TableCell>
+                            {isAggregate && (
+                                <TableCell className="hidden truncate text-xs text-muted-foreground md:table-cell">
+                                    {issue.project?.name || '—'}
+                                </TableCell>
+                            )}
                             <TableCell className="hidden text-right font-mono text-sm text-foreground sm:table-cell">
                                 {formatCompactNumber(issue.records_count || 0)}
                             </TableCell>
@@ -252,9 +269,11 @@ export function IssueTable({
                                             <DropdownMenuSeparator className="bg-border" />
                                             <DropdownMenuItem
                                                 onClick={() =>
-                                                    updateIssue(issue.id, {
-                                                        assigned_to: null,
-                                                    })
+                                                    updateIssue(
+                                                        issue.id,
+                                                        { assigned_to: null },
+                                                        issue,
+                                                    )
                                                 }
                                                 className="flex cursor-pointer items-center justify-between text-xs"
                                             >
@@ -267,10 +286,14 @@ export function IssueTable({
                                                 <DropdownMenuItem
                                                     key={member.id}
                                                     onClick={() =>
-                                                        updateIssue(issue.id, {
-                                                            assigned_to:
-                                                                member.id,
-                                                        })
+                                                        updateIssue(
+                                                            issue.id,
+                                                            {
+                                                                assigned_to:
+                                                                    member.id,
+                                                            },
+                                                            issue,
+                                                        )
                                                     }
                                                     className="flex cursor-pointer items-center justify-between text-xs"
                                                 >

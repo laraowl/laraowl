@@ -6,6 +6,7 @@ use App\Models\Project;
 use App\Models\Team;
 use App\Models\User;
 use App\Services\UpdateService;
+use App\Support\TeamProjectScope;
 use App\Support\Version;
 use Illuminate\Http\Request;
 use Inertia\Middleware;
@@ -86,6 +87,17 @@ class HandleInertiaRequests extends Middleware
                 $team = $team ?: $user?->currentTeam;
 
                 $projectParam = $request->route('project');
+
+                if ($projectParam === TeamProjectScope::SLUG) {
+                    return [
+                        'id' => null,
+                        'team_id' => $team?->id,
+                        'name' => 'All',
+                        'slug' => TeamProjectScope::SLUG,
+                        'is_aggregate' => true,
+                    ];
+                }
+
                 if ($projectParam instanceof Project) {
                     return $projectParam;
                 }

@@ -25,8 +25,9 @@ export default function ScheduledTaskDetails({
 }) {
     const { props }: any = usePage();
     const teamSlug = props.current_team?.slug || props.currentTeam?.slug;
-    const projectSlug =
-        props.current_project?.slug || props.currentProject?.slug;
+    const currentProject = props.current_project || props.currentProject;
+    const projectSlug = currentProject?.slug;
+    const isAggregate = Boolean(currentProject?.is_aggregate);
 
     const command = meta?.command || meta?.name || meta?.job || 'Unknown Task';
     const recordHref = (record: number) =>
@@ -95,6 +96,9 @@ export default function ScheduledTaskDetails({
                             <TableHeader className="bg-muted/30">
                                 <TableRow className="border-border text-[10px] font-bold text-muted-foreground uppercase hover:bg-transparent">
                                     <TableHead>Date</TableHead>
+                                    {isAggregate && (
+                                        <TableHead>Application</TableHead>
+                                    )}
                                     <TableHead>Status</TableHead>
                                     <TableHead className="text-right">
                                         Duration
@@ -113,6 +117,11 @@ export default function ScheduledTaskDetails({
                                                 record.created_at,
                                             ).toLocaleString()}
                                         </TableCell>
+                                        {isAggregate && (
+                                            <TableCell className="text-xs text-muted-foreground">
+                                                {record.project?.name || '—'}
+                                            </TableCell>
+                                        )}
                                         <TableCell>
                                             <Badge
                                                 variant="outline"

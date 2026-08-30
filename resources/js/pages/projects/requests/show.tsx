@@ -25,8 +25,9 @@ export default function RequestDetails({
 }) {
     const { props }: any = usePage();
     const teamSlug = props.current_team?.slug || props.currentTeam?.slug;
-    const projectSlug =
-        props.current_project?.slug || props.currentProject?.slug;
+    const currentProject = props.current_project || props.currentProject;
+    const projectSlug = currentProject?.slug;
+    const isAggregate = Boolean(currentProject?.is_aggregate);
 
     const path = meta?.path || '/';
     const method = meta?.method || 'GET';
@@ -112,6 +113,11 @@ export default function RequestDetails({
                                     <TableHead className="text-[10px] font-bold text-muted-foreground uppercase">
                                         Date
                                     </TableHead>
+                                    {isAggregate && (
+                                        <TableHead className="text-[10px] font-bold text-muted-foreground uppercase">
+                                            Application
+                                        </TableHead>
+                                    )}
                                     <TableHead className="text-right text-[10px] font-bold text-muted-foreground uppercase">
                                         Status
                                     </TableHead>
@@ -133,6 +139,11 @@ export default function RequestDetails({
                                             ).toLocaleString()}{' '}
                                             UTC
                                         </TableCell>
+                                        {isAggregate && (
+                                            <TableCell className="text-xs text-muted-foreground">
+                                                {record.project?.name || '—'}
+                                            </TableCell>
+                                        )}
                                         <TableCell className="text-right">
                                             <span
                                                 className={getStatusColor(

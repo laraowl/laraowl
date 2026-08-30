@@ -4,6 +4,7 @@ import {
     ChevronsUpDown,
     Plus,
     Layout,
+    Layers,
     Terminal,
     Search,
     Settings2,
@@ -19,6 +20,7 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useIsMobile } from '@/hooks/use-mobile';
+import { ALL_PROJECTS_SLUG } from '@/lib/project-scope';
 
 export function WorkspaceSwitcher({
     inHeader = false,
@@ -159,6 +161,43 @@ export function WorkspaceSwitcher({
                                 </div>
 
                                 <div className="space-y-0.5">
+                                    {'all'.includes(search.toLowerCase()) && (
+                                        <DropdownMenuItem
+                                            key={`${team.id}-${ALL_PROJECTS_SLUG}`}
+                                            onSelect={() =>
+                                                switchProject({
+                                                    id: null,
+                                                    team_id: team.id,
+                                                    slug: ALL_PROJECTS_SLUG,
+                                                    name: 'All',
+                                                })
+                                            }
+                                            className="group mx-1 flex cursor-pointer items-center justify-between gap-3 rounded-md px-3 py-2.5 transition-colors hover:bg-white/[0.03]"
+                                        >
+                                            <div className="flex min-w-0 items-center gap-3">
+                                                <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-slate-500 to-slate-700 text-foreground shadow-lg">
+                                                    <Layers className="size-5" />
+                                                </div>
+                                                <span
+                                                    className={`truncate text-sm font-semibold ${
+                                                        currentTeam?.id ===
+                                                            team.id &&
+                                                        currentProject?.slug ===
+                                                            ALL_PROJECTS_SLUG
+                                                            ? 'text-foreground'
+                                                            : 'text-foreground/60'
+                                                    }`}
+                                                >
+                                                    All
+                                                </span>
+                                            </div>
+                                            {currentTeam?.id === team.id &&
+                                                currentProject?.slug ===
+                                                    ALL_PROJECTS_SLUG && (
+                                                    <Check className="size-4 shrink-0 text-foreground" />
+                                                )}
+                                        </DropdownMenuItem>
+                                    )}
                                     {projects
                                         .filter(
                                             (p: any) => p.team_id === team.id,

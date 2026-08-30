@@ -4,6 +4,7 @@ namespace App\Http\Middleware;
 
 use App\Models\Project;
 use App\Models\Team;
+use App\Support\TeamProjectScope;
 use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -30,6 +31,13 @@ class EnsureProjectExists
         }
 
         $projectParam = $request->route('project');
+
+        // The "All" pseudo-application: let it through untouched. Screens
+        // that don't support the aggregate scope still 404 naturally, since
+        // no real Project row ever has this slug for implicit binding to match.
+        if ($projectParam === TeamProjectScope::SLUG) {
+            return $next($request);
+        }
 
         // Resolve project and ensure it belongs to the current team
         $project = $projectParam instanceof Project

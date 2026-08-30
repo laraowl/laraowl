@@ -25,8 +25,9 @@ export default function MailShow({
 }) {
     const { props }: any = usePage();
     const teamSlug = props.current_team?.slug || props.currentTeam?.slug;
-    const projectSlug =
-        props.current_project?.slug || props.currentProject?.slug;
+    const currentProject = props.current_project || props.currentProject;
+    const projectSlug = currentProject?.slug;
+    const isAggregate = Boolean(currentProject?.is_aggregate);
 
     const mailableClass =
         meta?.mailable_class ||
@@ -85,6 +86,9 @@ export default function MailShow({
                         <TableHeader className="bg-muted/30">
                             <TableRow className="border-border text-[10px] font-bold text-muted-foreground uppercase hover:bg-transparent">
                                 <TableHead>Sent At</TableHead>
+                                {isAggregate && (
+                                    <TableHead>Application</TableHead>
+                                )}
                                 <TableHead>Type</TableHead>
                                 <TableHead>Recipients</TableHead>
                                 <TableHead className="w-[50px]"></TableHead>
@@ -101,6 +105,11 @@ export default function MailShow({
                                             record.created_at,
                                         ).toLocaleString()}
                                     </TableCell>
+                                    {isAggregate && (
+                                        <TableCell className="text-xs text-muted-foreground">
+                                            {record.project?.name || '—'}
+                                        </TableCell>
+                                    )}
                                     <TableCell>
                                         <Badge
                                             className={`text-[10px] font-bold uppercase ${record.payload.queued === 'true' || record.payload.queued === true ? 'bg-blue-500/10 text-blue-400' : 'bg-muted text-foreground/50'} border-none`}

@@ -27,6 +27,8 @@ export default function LogsIndex({ records }: { records: any }) {
     const projectSlug =
         props.current_project?.slug || props.currentProject?.slug;
 
+    const isAggregate = Boolean(currentProject?.is_aggregate);
+
     const [selectedLog, setSelectedLog] = useState<any>(null);
     const recordHref = (record: number) =>
         showRecord.url(
@@ -80,6 +82,9 @@ export default function LogsIndex({ records }: { records: any }) {
                             <TableHeader className="bg-muted/30">
                                 <TableRow className="border-border text-[10px] font-bold text-muted-foreground uppercase hover:bg-transparent">
                                     <TableHead>Date</TableHead>
+                                    {isAggregate && (
+                                        <TableHead>Application</TableHead>
+                                    )}
                                     <TableHead>Source</TableHead>
                                     <TableHead>Level</TableHead>
                                     <TableHead>Message</TableHead>
@@ -98,6 +103,11 @@ export default function LogsIndex({ records }: { records: any }) {
                                                 log.created_at,
                                             ).toLocaleString()}
                                         </TableCell>
+                                        {isAggregate && (
+                                            <TableCell className="text-xs text-muted-foreground">
+                                                {log.project?.name || '—'}
+                                            </TableCell>
+                                        )}
                                         <TableCell>
                                             <div className="flex items-center gap-2">
                                                 <Badge

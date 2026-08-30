@@ -45,6 +45,7 @@ export default function Dashboard({
 }: any) {
     const { props }: any = usePage();
     const currentProject = props.current_project || props.currentProject;
+    const isAggregate = Boolean(currentProject?.is_aggregate);
     const teamSlug = props.current_team?.slug || props.currentTeam?.slug;
     const projectSlug = currentProject?.slug;
     const monitoringHref = (path: string) =>
@@ -77,9 +78,13 @@ export default function Dashboard({
                             className={`absolute top-0 right-0 h-24 w-24 translate-x-8 -translate-y-8 rounded-full opacity-20 blur-3xl ${
                                 !uptimeEnabled
                                     ? 'bg-muted-foreground'
-                                    : uptime_status?.current === 'up'
-                                      ? 'bg-emerald-500'
-                                      : 'bg-red-500'
+                                    : isAggregate
+                                      ? uptime_status?.down
+                                          ? 'bg-red-500'
+                                          : 'bg-emerald-500'
+                                      : uptime_status?.current === 'up'
+                                        ? 'bg-emerald-500'
+                                        : 'bg-red-500'
                             }`}
                         />
                         <CardContent className="p-8">
@@ -87,48 +92,72 @@ export default function Dashboard({
                                 <div className="text-[10px] font-black tracking-widest text-muted-foreground uppercase opacity-50">
                                     Availability
                                 </div>
-                                <Badge
-                                    className={`h-5 gap-1.5 border-none px-2 text-[9px] font-black uppercase ${
-                                        !uptimeEnabled
-                                            ? 'bg-muted text-muted-foreground'
-                                            : uptime_status?.current === 'up'
-                                              ? 'bg-emerald-500/10 text-emerald-500'
-                                              : uptime_status?.current ===
-                                                  'down'
-                                                ? 'bg-red-500/10 text-red-500'
-                                                : 'bg-muted text-muted-foreground'
-                                    }`}
-                                >
-                                    <span
-                                        className={`size-1.5 rounded-full ${
-                                            !uptimeEnabled
-                                                ? 'bg-muted-foreground'
+                                {!uptimeEnabled ? (
+                                    <Badge className="h-5 gap-1.5 border-none bg-muted px-2 text-[9px] font-black text-muted-foreground uppercase">
+                                        <span className="size-1.5 rounded-full bg-muted-foreground" />
+                                        Disabled
+                                    </Badge>
+                                ) : isAggregate ? (
+                                    <div className="flex items-center gap-1.5">
+                                        <Badge className="h-5 gap-1.5 border-none bg-emerald-500/10 px-2 text-[9px] font-black text-emerald-500 uppercase">
+                                            <span className="size-1.5 animate-pulse rounded-full bg-emerald-500" />
+                                            {uptime_status?.up ?? 0} UP
+                                        </Badge>
+                                        <Badge className="h-5 gap-1.5 border-none bg-red-500/10 px-2 text-[9px] font-black text-red-500 uppercase">
+                                            <span className="size-1.5 rounded-full bg-red-500" />
+                                            {uptime_status?.down ?? 0} DOWN
+                                        </Badge>
+                                    </div>
+                                ) : (
+                                    <Badge
+                                        className={`h-5 gap-1.5 border-none px-2 text-[9px] font-black uppercase ${
+                                            uptime_status?.current === 'up'
+                                                ? 'bg-emerald-500/10 text-emerald-500'
                                                 : uptime_status?.current ===
-                                                    'up'
-                                                  ? 'animate-pulse bg-emerald-500'
-                                                  : 'bg-red-500'
+                                                    'down'
+                                                  ? 'bg-red-500/10 text-red-500'
+                                                  : 'bg-muted text-muted-foreground'
                                         }`}
-                                    />
-                                    {!uptimeEnabled
-                                        ? 'Disabled'
-                                        : uptime_status?.current ||
-                                          'Monitoring...'}
-                                </Badge>
+                                    >
+                                        <span
+                                            className={`size-1.5 rounded-full ${uptime_status?.current === 'up' ? 'animate-pulse bg-emerald-500' : 'bg-red-500'}`}
+                                        />
+                                        {uptime_status?.current ||
+                                            'Monitoring...'}
+                                    </Badge>
+                                )}
                             </div>
                             <div className="mb-2 text-3xl font-black tracking-tighter text-foreground">
                                 {!uptimeEnabled
                                     ? 'Monitoring Disabled'
-                                    : uptime_status?.current === 'up'
-                                      ? 'All Systems Operational'
-                                      : uptime_status?.current === 'down'
-                                        ? 'Service Disruption'
-                                        : 'Awaiting Data'}
+                                    : isAggregate
+                                      ? !uptime_status?.up &&
+                                        !uptime_status?.down
+                                          ? 'Awaiting Data'
+                                          : !uptime_status?.down
+                                            ? 'All Systems Operational'
+                                            : !uptime_status?.up
+                                              ? 'Service Disruption'
+                                              : `${uptime_status.up} out of ${uptime_status.total} Systems Operational`
+                                      : uptime_status?.current === 'up'
+                                        ? 'All Systems Operational'
+                                        : uptime_status?.current === 'down'
+                                          ? 'Service Disruption'
+                                          : 'Awaiting Data'}
                             </div>
                             <p className="text-[10px] font-medium tracking-tight text-muted-foreground uppercase">
                                 {!uptimeEnabled
                                     ? 'Enable uptime monitoring in project settings'
                                     : uptime_status?.last_check
-                                      ? `Last check: ${new Date(uptime_status.last_check).toLocaleTimeString()}`
+                                      ? `Last check: ${
+                                            isAggregate
+                                                ? new Date(
+                                                      uptime_status.last_check,
+                                                  ).toLocaleString()
+                                                : new Date(
+                                                      uptime_status.last_check,
+                                                  ).toLocaleTimeString()
+                                        }`
                                       : 'Configuring monitor...'}
                             </p>
                         </CardContent>

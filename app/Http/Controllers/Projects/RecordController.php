@@ -2,12 +2,13 @@
 
 namespace App\Http\Controllers\Projects;
 
+use App\Concerns\ResolvesProjectScope;
 use App\Http\Controllers\Controller;
-use App\Models\Project;
 use App\Models\Record;
 use App\Models\Team;
 use App\Services\RecordService;
 use App\Support\ExceptionTrace;
+use App\Support\ProjectContext;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Inertia\Inertia;
@@ -15,6 +16,8 @@ use Inertia\Response;
 
 class RecordController extends Controller
 {
+    use ResolvesProjectScope;
+
     protected RecordService $recordService;
 
     public function __construct(RecordService $recordService)
@@ -24,31 +27,37 @@ class RecordController extends Controller
 
     /**
      * Unified Entry Point for Monitoring Dashboards.
+     *
+     * `$project` is the raw route segment rather than a bound `Project` so it
+     * can also be the reserved "All" slug (see `ResolvesProjectScope`). The
+     * drill-down/detail actions below accept the same aggregate scope.
      */
-    public function index(Request $request, Team $current_team, Project $project): Response
+    public function index(Request $request, Team $current_team, string $project): Response
     {
+        $scope = $this->resolveProjectScope($current_team, $project);
+
         $routeName = $request->route()->getName();
         $period = $request->query('period', '1h');
         $from = $request->query('from');
         $to = $request->query('to');
 
         if ($routeName === 'dashboard') {
-            return $this->renderDashboardIndex($project, $period, $from, $to);
+            return $this->renderDashboardIndex($scope, $period, $from, $to);
         }
 
         $method = 'render'.Str::studly(str_replace('-', '_', $routeName)).'Index';
 
         if (method_exists($this, $method)) {
-            return $this->{$method}($project, $period, $from, $to);
+            return $this->{$method}($scope, $period, $from, $to);
         }
 
         // Fallback for generic record lists (Logs, Cache, etc.)
         $type = $this->resolveTypeFromRoute($routeName);
 
         return Inertia::render($this->resolveComponentPath($routeName), [
-            'records' => $this->recordService->getPaginatedRecords($project, $type, $request->search, $period, $from, $to),
+            'records' => $this->recordService->getPaginatedRecords($scope, $type, $request->search, $period, $from, $to),
             'filters' => $request->only(['search', 'period', 'from', 'to']),
-            'stats' => $this->recordService->getQuickStats($project, $period, $from, $to),
+            'stats' => $this->recordService->getQuickStats($scope, $period, $from, $to),
             'period' => $period,
             'from' => $from,
             'to' => $to,
@@ -58,12 +67,12 @@ class RecordController extends Controller
     /**
      * Specialized Domain Renderers
      */
-    protected function renderDashboardIndex(Project $project, string $period, ?string $from, ?string $to): Response
+    protected function renderDashboardIndex(ProjectContext $project, string $period, ?string $from, ?string $to): Response
     {
         return $this->renderWithStats('dashboard', $this->recordService->getDashboardStats($project, $period, $from, $to), $project, $period, $from, $to);
     }
 
-    protected function renderRequestsIndex(Project $project, string $period, ?string $from, ?string $to): Response
+    protected function renderRequestsIndex(ProjectContext $project, string $period, ?string $from, ?string $to): Response
     {
         $sort = request()->query('sort', 'total');
         $direction = request()->query('direction', 'desc');
@@ -71,67 +80,67 @@ class RecordController extends Controller
         return $this->renderWithStats('projects/requests', $this->recordService->getRequestStats($project, $period, $from, $to, $sort, $direction), $project, $period, $from, $to);
     }
 
-    protected function renderUsersIndex(Project $project, string $period, ?string $from, ?string $to): Response
+    protected function renderUsersIndex(ProjectContext $project, string $period, ?string $from, ?string $to): Response
     {
         return $this->renderWithStats('projects/users', $this->recordService->getUserStats($project, $period, $from, $to), $project, $period, $from, $to);
     }
 
-    protected function renderJobsIndex(Project $project, string $period, ?string $from, ?string $to): Response
+    protected function renderJobsIndex(ProjectContext $project, string $period, ?string $from, ?string $to): Response
     {
         return $this->renderWithStats('projects/jobs', $this->recordService->getJobStats($project, $period, $from, $to), $project, $period, $from, $to);
     }
 
-    protected function renderExceptionsIndex(Project $project, string $period, ?string $from, ?string $to): Response
+    protected function renderExceptionsIndex(ProjectContext $project, string $period, ?string $from, ?string $to): Response
     {
         return $this->renderWithStats('projects/exceptions', $this->recordService->getExceptionStats($project, $period, $from, $to), $project, $period, $from, $to);
     }
 
-    protected function renderCommandsIndex(Project $project, string $period, ?string $from, ?string $to): Response
+    protected function renderCommandsIndex(ProjectContext $project, string $period, ?string $from, ?string $to): Response
     {
         return $this->renderWithStats('projects/commands', $this->recordService->getCommandStats($project, $period, $from, $to), $project, $period, $from, $to);
     }
 
-    protected function renderQueriesIndex(Project $project, string $period, ?string $from, ?string $to): Response
+    protected function renderQueriesIndex(ProjectContext $project, string $period, ?string $from, ?string $to): Response
     {
         return $this->renderWithStats('projects/queries', $this->recordService->getQueryStats($project, $period, $from, $to), $project, $period, $from, $to);
     }
 
-    protected function renderScheduledTasksIndex(Project $project, string $period, ?string $from, ?string $to): Response
+    protected function renderScheduledTasksIndex(ProjectContext $project, string $period, ?string $from, ?string $to): Response
     {
         return $this->renderWithStats('projects/scheduled-tasks', $this->recordService->getScheduledTaskStats($project, $period, $from, $to), $project, $period, $from, $to);
     }
 
-    protected function renderNotificationsIndex(Project $project, string $period, ?string $from, ?string $to): Response
+    protected function renderNotificationsIndex(ProjectContext $project, string $period, ?string $from, ?string $to): Response
     {
         return $this->renderWithStats('projects/notifications', $this->recordService->getNotificationStats($project, $period, $from, $to), $project, $period, $from, $to);
     }
 
-    protected function renderMailIndex(Project $project, string $period, ?string $from, ?string $to): Response
+    protected function renderMailIndex(ProjectContext $project, string $period, ?string $from, ?string $to): Response
     {
         return $this->renderWithStats('projects/mail', $this->recordService->getMailStats($project, $period, $from, $to), $project, $period, $from, $to);
     }
 
-    protected function renderOutgoingRequestsIndex(Project $project, string $period, ?string $from, ?string $to): Response
+    protected function renderOutgoingRequestsIndex(ProjectContext $project, string $period, ?string $from, ?string $to): Response
     {
         return $this->renderWithStats('projects/outgoing-requests', $this->recordService->getOutgoingRequestStats($project, $period, $from, $to), $project, $period, $from, $to);
     }
 
-    protected function renderUptimeIndex(Project $project, string $period, ?string $from, ?string $to): Response
+    protected function renderUptimeIndex(ProjectContext $project, string $period, ?string $from, ?string $to): Response
     {
         return $this->renderWithStats('projects/uptime', $this->recordService->getUptimeStats($project, $period, $from, $to), $project, $period, $from, $to);
     }
 
-    protected function renderSecurityIndex(Project $project, string $period, ?string $from, ?string $to): Response
+    protected function renderSecurityIndex(ProjectContext $project, string $period, ?string $from, ?string $to): Response
     {
         return $this->renderWithStats('projects/security', $this->recordService->getSecurityStats($project, $period, $from, $to), $project, $period, $from, $to);
     }
 
-    protected function renderCacheIndex(Project $project, string $period, ?string $from, ?string $to): Response
+    protected function renderCacheIndex(ProjectContext $project, string $period, ?string $from, ?string $to): Response
     {
         return $this->renderWithStats('projects/cache', $this->recordService->getCacheStats($project, $period, $from, $to), $project, $period, $from, $to);
     }
 
-    protected function renderLogsIndex(Project $project, string $period, ?string $from, ?string $to): Response
+    protected function renderLogsIndex(ProjectContext $project, string $period, ?string $from, ?string $to): Response
     {
         return Inertia::render('projects/logs/index', [
             'records' => $this->recordService->getLogRecords($project, request('search'), $period, $from, $to),
@@ -145,74 +154,82 @@ class RecordController extends Controller
 
     /**
      * Drill-down Detail Handlers (Hashed)
+     *
+     * `$project` is the raw route segment, not a bound `Project`, so these
+     * also work under the "All" aggregate slug: the history shown is every
+     * matching record across the team's projects for that hash — consistent
+     * with the list pages, which already merge rows by hash across projects
+     * (see `RecordService::groupList()`) rather than keeping them separate.
      */
-    public function showDetails(Request $request, Team $current_team, Project $project, string $hash): Response
+    public function showDetails(Request $request, Team $current_team, string $project, string $hash): Response
     {
-        return $this->renderHistory($project, $hash, 'projects/requests/show');
+        return $this->renderHistory($this->resolveProjectScope($current_team, $project), $hash, 'projects/requests/show');
     }
 
-    public function showJobDetails(Request $request, Team $current_team, Project $project, string $hash): Response
+    public function showJobDetails(Request $request, Team $current_team, string $project, string $hash): Response
     {
-        return $this->renderHistory($project, $hash, 'projects/jobs/show');
+        return $this->renderHistory($this->resolveProjectScope($current_team, $project), $hash, 'projects/jobs/show');
     }
 
-    public function showExceptionDetails(Request $request, Team $current_team, Project $project, string $hash): Response
+    public function showExceptionDetails(Request $request, Team $current_team, string $project, string $hash): Response
     {
-        return $this->renderHistory($project, $hash, 'projects/exceptions/show');
+        return $this->renderHistory($this->resolveProjectScope($current_team, $project), $hash, 'projects/exceptions/show');
     }
 
-    public function showQueryDetails(Request $request, Team $current_team, Project $project, string $hash): Response
+    public function showQueryDetails(Request $request, Team $current_team, string $project, string $hash): Response
     {
-        return $this->renderHistory($project, $hash, 'projects/queries/show');
+        return $this->renderHistory($this->resolveProjectScope($current_team, $project), $hash, 'projects/queries/show');
     }
 
-    public function showCommandDetails(Request $request, Team $current_team, Project $project, string $hash): Response
+    public function showCommandDetails(Request $request, Team $current_team, string $project, string $hash): Response
     {
-        return $this->renderHistory($project, $hash, 'projects/commands/show');
+        return $this->renderHistory($this->resolveProjectScope($current_team, $project), $hash, 'projects/commands/show');
     }
 
-    public function showScheduledTaskDetails(Request $request, Team $current_team, Project $project, string $hash): Response
+    public function showScheduledTaskDetails(Request $request, Team $current_team, string $project, string $hash): Response
     {
-        return $this->renderHistory($project, $hash, 'projects/scheduled-tasks/show');
+        return $this->renderHistory($this->resolveProjectScope($current_team, $project), $hash, 'projects/scheduled-tasks/show');
     }
 
-    public function showNotificationDetails(Request $request, Team $current_team, Project $project, string $hash): Response
+    public function showNotificationDetails(Request $request, Team $current_team, string $project, string $hash): Response
     {
-        return $this->renderHistory($project, $hash, 'projects/notifications/show');
+        return $this->renderHistory($this->resolveProjectScope($current_team, $project), $hash, 'projects/notifications/show');
     }
 
-    public function showMailDetails(Request $request, Team $current_team, Project $project, string $hash): Response
+    public function showMailDetails(Request $request, Team $current_team, string $project, string $hash): Response
     {
-        return $this->renderHistory($project, $hash, 'projects/mail/show');
+        return $this->renderHistory($this->resolveProjectScope($current_team, $project), $hash, 'projects/mail/show');
     }
 
-    public function showOutgoingRequestDetails(Request $request, Team $current_team, Project $project, string $hash): Response
+    public function showOutgoingRequestDetails(Request $request, Team $current_team, string $project, string $hash): Response
     {
-        return $this->renderHistory($project, $hash, 'projects/outgoing-requests/show');
+        return $this->renderHistory($this->resolveProjectScope($current_team, $project), $hash, 'projects/outgoing-requests/show');
     }
 
-    public function showUserDetails(Request $request, Team $current_team, Project $project, string $hash): Response
+    public function showUserDetails(Request $request, Team $current_team, string $project, string $hash): Response
     {
+        $scope = $this->resolveProjectScope($current_team, $project);
         $period = $request->query('period', '1h');
         $from = $request->query('from');
         $to = $request->query('to');
 
-        return Inertia::render('projects/users/show', $this->recordService->getUserHistory($project, $hash, $period, $from, $to));
+        return Inertia::render('projects/users/show', $this->recordService->getUserHistory($scope, $hash, $period, $from, $to));
     }
 
-    public function showSecurityDetails(Request $request, Team $current_team, Project $project, string $hash): Response
+    public function showSecurityDetails(Request $request, Team $current_team, string $project, string $hash): Response
     {
+        $scope = $this->resolveProjectScope($current_team, $project);
         $period = $request->query('period', '1h');
         $from = $request->query('from');
         $to = $request->query('to');
 
-        return Inertia::render('projects/security/show', $this->recordService->getSecurityHistoryByHash($project, $hash, $period, $from, $to));
+        return Inertia::render('projects/security/show', $this->recordService->getSecurityHistoryByHash($scope, $hash, $period, $from, $to));
     }
 
     /**
      * Helpers
      */
-    protected function renderHistory(Project $project, string $hash, string $component): Response
+    protected function renderHistory(ProjectContext $project, string $hash, string $component): Response
     {
         $period = request()->query('period', '1h');
         $from = request()->query('from');
@@ -238,7 +255,7 @@ class RecordController extends Controller
         ]);
     }
 
-    protected function renderWithStats(string $component, array $data, Project $project, string $period, ?string $from = null, ?string $to = null): Response
+    protected function renderWithStats(string $component, array $data, ProjectContext $project, string $period, ?string $from = null, ?string $to = null): Response
     {
         return Inertia::render($component.'/index', array_merge($data, [
             'stats' => $this->recordService->getQuickStats($project, $period, $from, $to),
@@ -260,19 +277,22 @@ class RecordController extends Controller
         return $routeName === 'dashboard' ? 'dashboard' : 'projects/'.$routeName.'/index';
     }
 
-    public function showOccurrence(Team $current_team, Project $project, Record $record): Response
+    public function showOccurrence(Team $current_team, string $project, Record $record): Response
     {
-        // The record is bound by global id, so verify it belongs to the project
-        // in the URL — otherwise any member of any team could read another
-        // team's telemetry by guessing record ids.
-        abort_if($record->project_id !== $project->id, 404);
+        $scope = $this->resolveProjectScope($current_team, $project);
+
+        // The record is bound by global id, so verify it belongs to a project
+        // in scope for the URL — otherwise any member of any team could read
+        // another team's telemetry by guessing record ids.
+        abort_if(! in_array($record->project_id, $scope->projectIds(), true), 404);
 
         $record->load('issue');
         $relatedRecords = [];
         $traceId = $record->trace_id ?? ($record->payload['trace_id'] ?? null);
 
         if ($traceId) {
-            $relatedRecords = $project->records()
+            $relatedRecords = Record::query()
+                ->whereIn('project_id', $scope->projectIds())
                 ->where('trace_id', $traceId)
                 ->where('id', '!=', $record->id)
                 ->orderBy('created_at')
