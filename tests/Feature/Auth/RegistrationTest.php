@@ -23,7 +23,12 @@ test('new users can register', function () {
 });
 
 test('registration is disabled when ALLOW_REGISTRATION is false', function () {
+    // Both superglobals must be set: Laravel's env() resolves $_SERVER before
+    // $_ENV (see vlucas/phpdotenv's ServerConstAdapter), so overriding only
+    // $_ENV is silently ignored whenever $_SERVER already holds a value for
+    // this key (e.g. phpunit.xml's <server> entries, or a real OS env var).
     $_ENV['ALLOW_REGISTRATION'] = 'false';
+    $_SERVER['ALLOW_REGISTRATION'] = 'false';
     $this->refreshApplication();
 
     $response = $this->get('/register');
@@ -37,6 +42,6 @@ test('registration is disabled when ALLOW_REGISTRATION is false', function () {
     ]);
     $responseStore->assertStatus(404);
 
-    unset($_ENV['ALLOW_REGISTRATION']);
+    unset($_ENV['ALLOW_REGISTRATION'], $_SERVER['ALLOW_REGISTRATION']);
     $this->refreshApplication();
 });
