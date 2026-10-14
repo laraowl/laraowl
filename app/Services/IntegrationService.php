@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Integration;
 use App\Models\Issue;
+use App\Support\GotifyMessage;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
@@ -61,6 +62,7 @@ class IntegrationService
             'telegram' => $this->sendToTelegram($integration, $title, $message, $fields, $url),
             'webhook' => $this->sendToWebhook($integration, $title, $message, $fields, $url),
             'email' => $this->sendToEmail($integration, $title, $message, $fields, $url),
+            'gotify' => $this->sendToGotify($integration, $title, $message, $fields, $url),
             default => null,
         };
     }
@@ -202,6 +204,31 @@ class IntegrationService
         });
     }
 
+    protected function sendToGotify(Integration $integration, string $title, string $message, array $fields = [], ?string $url = null): void
+    {
+        $serverUrl = $integration->data['server_url'] ?? null;
+        $appToken = $integration->data['app_token'] ?? null;
+        if (! $serverUrl || ! $appToken) {
+            return;
+        }
+
+        $extras = [
+            'client::display' => ['contentType' => 'text/markdown'],
+        ];
+        if ($url) {
+            $extras['client::notification'] = ['click' => ['url' => $url]];
+        }
+
+        Http::timeout(10)
+            ->withHeaders(['X-Gotify-Key' => $appToken])
+            ->post(rtrim($serverUrl, '/').'/message', [
+                'title' => $title,
+                'message' => GotifyMessage::format($message, $fields, $url),
+                'priority' => GotifyMessage::priority($fields),
+                'extras' => $extras,
+            ]);
+    }
+
     public function getAvailableTypes(): array
     {
         return [
@@ -239,6 +266,14 @@ class IntegrationService
                 'name' => 'Email',
                 'fields' => [
                     ['name' => 'email', 'label' => 'Email Address', 'type' => 'email', 'placeholder' => 'ops@example.com'],
+                ],
+            ],
+            [
+                'id' => 'gotify',
+                'name' => 'Gotify',
+                'fields' => [
+                    ['name' => 'server_url', 'label' => 'Server URL', 'type' => 'url', 'placeholder' => 'https://gotify.example.com'],
+                    ['name' => 'app_token', 'label' => 'App Token', 'type' => 'password', 'placeholder' => 'A...'],
                 ],
             ],
         ];

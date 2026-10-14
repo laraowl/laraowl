@@ -37,4 +37,5 @@ test('outgoing integration requests are sent with a timeout', function (string $
     'discord' => ['discord', ['webhook_url' => 'https://discord.test/api/webhooks/abc']],
     'telegram' => ['telegram', ['bot_token' => '123:abc', 'chat_id' => '42']],
     'webhook' => ['webhook', ['url' => 'https://example.test/hook']],
+    'gotify' => ['gotify', ['server_url' => 'https://gotify.test', 'app_token' => 'abc']],
 ]);
