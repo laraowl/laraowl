@@ -68,7 +68,7 @@ const iconMap: any = {
     webhook: Globe,
     telegram: Send,
     email: Mail,
-    gotify: MessageSquare,
+    gotify: Bell,
 };
 
 export default function ProjectSettings({

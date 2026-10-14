@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Integration;
 use App\Models\Issue;
+use App\Support\GotifyMessage;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
@@ -211,26 +212,20 @@ class IntegrationService
             return;
         }
 
-        $body = '';
-        foreach ($fields as $label => $value) {
-            if ($value === null || $value === '') {
-                continue;
-            }
-            $body .= "- **{$label}:** {$value}\n";
-        }
-        $body .= "\n{$message}\n";
+        $extras = [
+            'client::display' => ['contentType' => 'text/markdown'],
+        ];
         if ($url) {
-            $body .= "\n[View Details]({$url})";
+            $extras['client::notification'] = ['click' => ['url' => $url]];
         }
 
-        Http::withHeaders(['X-Gotify-Key' => $appToken])
+        Http::timeout(10)
+            ->withHeaders(['X-Gotify-Key' => $appToken])
             ->post(rtrim($serverUrl, '/').'/message', [
                 'title' => $title,
-                'message' => $body,
-                'priority' => 5,
-                'extras' => [
-                    'client::display' => ['contentType' => 'text/markdown'],
-                ],
+                'message' => GotifyMessage::format($message, $fields, $url),
+                'priority' => GotifyMessage::priority($fields),
+                'extras' => $extras,
             ]);
     }
 
