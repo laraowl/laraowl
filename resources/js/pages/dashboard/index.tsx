@@ -230,7 +230,7 @@ export default function Dashboard({
                                         </div>
                                         <div className="space-y-0.5">
                                             <div className="text-xs font-black tracking-tight text-foreground uppercase">
-                                                {duration_stats?.avg < 500
+                                                {duration_stats?.avg < 500_000
                                                     ? 'System Optimized'
                                                     : 'Latency Detected'}
                                             </div>
@@ -245,7 +245,7 @@ export default function Dashboard({
                                     <div className="flex items-center gap-2 pl-10">
                                         <div className="h-1 flex-1 overflow-hidden rounded-full bg-muted">
                                             <div
-                                                className={`h-full rounded-full ${duration_stats?.avg < 500 ? 'bg-emerald-500' : 'bg-orange-500'}`}
+                                                className={`h-full rounded-full ${duration_stats?.avg < 500_000 ? 'bg-emerald-500' : 'bg-orange-500'}`}
                                                 style={{
                                                     width: `${Math.min(100, (duration_stats?.avg / 1000) * 100)}%`,
                                                 }}
